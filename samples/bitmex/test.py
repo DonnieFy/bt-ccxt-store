@@ -2,13 +2,17 @@ from ccxtbt import CCXTStore
 import backtrader as bt
 from datetime import datetime, timedelta
 import json
+import pytz
 
 
 class TestStrategy(bt.Strategy):
 
     def __init__(self):
-
-        self.sma = bt.indicators.SMA(self.data,period=21)
+        self.inds = dict()
+        self.live_data = False
+        for d in self.datas:
+            self.inds[d] = dict()
+            self.inds[d]['pnt'] = bt.indicators.PctChange(d.close, period=1)
 
     def next(self):
 
@@ -26,11 +30,11 @@ class TestStrategy(bt.Strategy):
             # Slow things down.
             cash = 'NA'
 
-        for data in self.datas:
+        for d in self.datas:
 
-            print('{} - {} | Cash {} | O: {} H: {} L: {} C: {} V:{} SMA:{}'.format(data.datetime.datetime(),
-                                                                                   data._name, cash, data.open[0], data.high[0], data.low[0], data.close[0], data.volume[0],
-                                                                                   self.sma[0]))
+            print('{} - {} | Cash {} | O: {} H: {} L: {} C: {} V:{} pnt:{}'.format(d.datetime.datetime(tz=pytz.timezone('Asia/Shanghai')),
+                                                                                   d._name, cash, d.open[0], d.high[0], d.low[0], d.close[0], d.volume[0],
+                                                                                   self.inds[d]['pnt'][0]))
 
     def notify_data(self, data, status, *args, **kwargs):
         dn = data._name
@@ -64,7 +68,7 @@ config = {'apiKey': params["binance"]["apikey"],
 # IMPORTANT NOTE - Kraken (and some other exchanges) will not return any values
 # for get cash or value if You have never held any BNB coins in your account.
 # So switch BNB to a coin you have funded previously if you get errors
-store = CCXTStore(exchange='binance', currency='BNB', config=config, retries=5, debug=False)
+store = CCXTStore(exchange='binance', currency='USDT', config=config, retries=5, debug=False)
 
 
 # Get the broker and pass any kwargs if needed.
@@ -95,13 +99,13 @@ cerebro.setbroker(broker)
 
 # Get our data
 # Drop newest will prevent us from loading partial data from incomplete candles
-hist_start_date = datetime.utcnow() - timedelta(minutes=50)
-data = store.getdata(dataname='BNB/USDT', name="BNBUSDT",
+hist_start_date = datetime.utcnow() - timedelta(minutes=500)
+for v in ['ETCUSDT', 'OPUSDT', 'ETHUSDT']:
+    data = store.getdata(dataname=v, name=v,
                      timeframe=bt.TimeFrame.Minutes, fromdate=hist_start_date,
                      compression=15, ohlcv_limit=50, drop_newest=True) #, historical=True)
-
-# Add the feed
-cerebro.adddata(data)
+    # Add the feed
+    cerebro.adddata(data)
 
 # Run the strategy
 cerebro.run()
