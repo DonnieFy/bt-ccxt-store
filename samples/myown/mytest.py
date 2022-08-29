@@ -5,6 +5,15 @@ import json
 import pytz
 from backtrader import Order
 
+inds = ['pnt_45', 'pnt_90', 'pnt_120', 'pnt_150']
+levels = [0.005, 0.01, 0.015, 0.02, 0.025]
+times = ['0', '15', '30', '45', '60']
+
+result_pnt_sum = dict()
+result_count = dict()
+result_win = dict()
+result_lose = dict()
+
 
 class TestStrategy(bt.Strategy):
 
@@ -16,45 +25,73 @@ class TestStrategy(bt.Strategy):
         self.status = ''
         self.pnts = dict()
         self.postion_buys = []
+        self.buys = dict()
+        self.buy_prices = dict()
+        self.sma = bt.indicators.SMA(self.datas[0], period=80)
         for d in self.datas:
             self.inds[d] = dict()
-            self.inds[d]['pnt'] = bt.indicators.PctChange(d.close, period=2)
+            self.inds[d]['pnt_45'] = bt.indicators.PctChange(d.close, period=3)
+            self.inds[d]['pnt_90'] = bt.indicators.PctChange(d.close, period=6)
+            self.inds[d]['pnt_120'] = bt.indicators.PctChange(d.close, period=8)
+            self.inds[d]['pnt_150'] = bt.indicators.PctChange(d.close, period=10)
 
     def next(self):
-        pnts = []
         self.pnts.clear()
-        for d in self.datas:
-            pnt = self.inds[d]['pnt'][0]
-            pnts.append(pnt)
-            self.pnts[d._name] = pnt
-        sorted_pnts = sorted(enumerate(pnts), key=lambda x: x[1], reverse=True)
-        inxs = [i[0] for i in sorted_pnts]
-        pnts = [i[1] for i in sorted_pnts]
+        long = self.datas[0].close[0] >= self.sma[0]
+        for ind in inds:
+            for level in levels:
+                buy_times = self.get_buy_times(ind=ind, level=level)
+                for d in self.datas:
+                    if d in buy_times:
+                        self.add_buy_times(ind=ind, level=level, data=d)
+                    elif not long:
+                        pnt = self.inds[d][ind][0]
+                        if -level <= pnt <= level:
+                            self.add_buy_times(ind=ind, level=level, data=d)
 
-        total_value = self.broker.getvalue()
+    def add_buy_times(self, ind, level, data):
+        buy_times = self.get_buy_times(ind=ind, level=level)
+        key = ind + '--' + str(level)
+        if data not in buy_times:
+            buy_times[data] = '0'
+            if key not in result_count:
+                result_count[key] = 1
+            else:
+                result_count[key] = result_count[key] + 1
+        else:
+            time = buy_times[data]
+            index = times.index(time)
+            pnt = self.inds[data][inds[index]][0]
+            index += 1
+            self.log('{} 涨幅 {}，{} 分钟后涨幅 {}'.format(ind, level, times[index], pnt))
+            key += '---' + times[index]
+            if key not in result_pnt_sum:
+                result_pnt_sum[key] = pnt
+                result_win[key] = 0
+                result_lose[key] = 0
+            else:
+                result_pnt_sum[key] = result_pnt_sum[key] + pnt
+            if pnt < 0:
+                result_win[key] = result_win[key] + 1
+            else:
+                result_lose[key] = result_lose[key] + 1
 
-        self.log('账户价值：%s' % (total_value,))
-        buys = []
-        for i, idx in enumerate(inxs):
-            d = self.datas[idx]
-            pnt = pnts[i]
-            if pnt >= 0.04:
-                buys.append(d)
+            if index == 4:
+                # 过了60就清掉
+                buy_times.pop(data)
             else:
-                break
-        postion_buys_new = []
-        for d in self.postion_buys:
-            if d in buys:
-                buys.remove(d)
-                postion_buys_new.append(d)
-            else:
-                size = self.getposition(d).size
-                self.sell(data=d, size=size, exectype=Order.Market)
-        for d in buys:
-            ss = 5000 / d.close[0]
-            self.buy(data=d, size=ss, exectype=Order.Market)
-            postion_buys_new.append(d)
-        self.postion_buys = postion_buys_new
+                # 不到60就加一位
+                buy_times[data] = times[index]
+
+    # pnt_15 -- 0.03 -- 15  ： 15分钟涨幅>0.03，持仓15分钟
+    def get_buy_times(self, ind, level):
+        if ind not in self.buys:
+            self.buys[ind] = dict()
+        buys_level = self.buys[ind]
+        if level not in buys_level:
+            buys_level[level] = dict()
+        buys_times = buys_level[level]
+        return buys_times
 
     def notify_data(self, data, status, *args, **kwargs):
         dn = data._name
@@ -122,8 +159,13 @@ with open('../params.json', 'r') as f:
     params = json.load(f)
 with open('../symbols.txt', 'r') as f:
     symbols = f.read().split('\n')
+symbols.remove('BTCUSDT')
+symbols.insert(0, 'BTCUSDT')
 
-cerebro = bt.Cerebro(quicknotify=True)
+removed = ['DUSKUSDT', 'ROSEUSDT', 'APEUSDT', 'GALUSDT', 'FTTUSDT', 'DARUSDT', 'OPUSDT', 'GMTUSDT', 'JASMYUSDT', 'API3USDT', 'WOOUSDT', 'FLOWUSDT', 'BNXUSDT', 'IMXUSDT']
+for item in removed:
+    symbols.remove(item)
+cerebro = bt.Cerebro(runonce=True)
 
 
 # Add the strategy
@@ -145,20 +187,30 @@ config = {'apiKey': params["binance"]["apikey"],
 # IMPORTANT NOTE - Kraken (and some other exchanges) will not return any values
 # for get cash or value if You have never held any BNB coins in your account.
 # So switch BNB to a coin you have funded previously if you get errors
-store = CCXTStore(exchange='binance', currency='USDT', config=config, retries=5, debug=False)
+store = CCXTStore(exchange='binance', currency='USDT', config=config, retries=5, debug=True)
 
 # Get our data
 # Drop newest will prevent us from loading partial data from incomplete candles
-hist_start_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 10)
+hist_start_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 200)
+hist_end_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 100)
 data0 = None
+
 for v in symbols:
     data = store.getdata(dataname=v, name=v, market='future',
-                     timeframe=bt.TimeFrame.Minutes, fromdate=hist_start_date,
-                     compression=15, ohlcv_limit=1000, drop_newest=True, historical=True)
+                     timeframe=bt.TimeFrame.Minutes, fromdate=hist_start_date, todate=hist_end_date,
+                     compression=15, ohlcv_limit=1000)
     # Add the feed
     data.plotinfo.plot = False
     cerebro.adddata(data)
 
 # Run the strategy
 cerebro.run()
-cerebro.plot()
+for key in result_count:
+    print('key:{}, value:{}'.format(key, result_count[key]))
+
+for key in result_pnt_sum:
+    print('key:{}, value:{}, win:{}, lose:{}, avg:{}'.format(key,
+                                                             result_pnt_sum[key],
+                                                             result_win[key],
+                                                             result_lose[key],
+                                                             result_pnt_sum[key]/(result_win[key] + result_lose[key])))

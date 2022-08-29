@@ -93,7 +93,7 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
         if self.p.fromdate:
             self._state = self._ST_HISTORBACK
             self.put_notification(self.DELAYED)
-            self._fetch_ohlcv(self.p.fromdate)
+            self._fetch_ohlcv(self.p.fromdate, todate=self.p.todate)
 
         else:
             self._state = self._ST_LIVE
@@ -130,17 +130,19 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
                         self.put_notification(self.LIVE)
                         continue
 
-    def _fetch_ohlcv(self, fromdate=None):
+    def _fetch_ohlcv(self, fromdate=None, todate=None):
         """Fetch OHLCV data into self._data queue"""
         granularity = self.store.get_granularity(self._timeframe, self._compression)
 
         if fromdate:
             since = int((fromdate - datetime(1970, 1, 1)).total_seconds() * 1000)
+            end_date = int((todate - datetime(1970, 1, 1)).total_seconds() * 1000) if todate is not None else None
         else:
             if self._last_ts > 0:
                 since = self._last_ts
             else:
                 since = None
+            end_date = None
 
         limit = self.p.ohlcv_limit
 
@@ -194,8 +196,9 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
                         print('Adding: {}'.format(ohlcv))
                     self._data.append(ohlcv)
                     self._last_ts = tstamp
+            since = self._last_ts
 
-            if dlen == len(self._data):
+            if dlen == len(self._data) or (self._last_ts >= end_date if end_date is not None else False):
                 break
 
     def _load_ticks(self):

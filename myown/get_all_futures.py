@@ -34,38 +34,46 @@ exchange = ccxt.binance({
 
 markets = exchange.load_markets()
 
+for market in markets:
+    print(market)
 symbol = 'BTC/USDT'  # YOUR SYMBOL HERE
 market = exchange.market(symbol)
+trades = exchange.fetch_my_trades(symbol)
+print(trades)
 
-exchange.verbose = True  # UNCOMMENT THIS AFTER LOADING THE MARKETS FOR DEBUGGING
+data = exchange.fetch_ohlcv('BTCSTUSDT', timeframe='1m', limit=50)
+# print(data)
 
-print('----------------------------------------------------------------------')
-
-print('Fetching your balance:')
-response = exchange.fetch_balance()
-pprint(response['total'])  # make sure you have enough futures margin...
-# pprint(response['info'])  # more details
-
-print('----------------------------------------------------------------------')
-
-# https://binance-docs.github.io/apidocs/futures/en/#position-information-v2-user_data
-
-print('Getting your positions:')
-response = exchange.fapiPrivateV2_get_positionrisk()
-print(table1(response))
-
-print('----------------------------------------------------------------------')
-
-# https://binance-docs.github.io/apidocs/futures/en/#change-position-mode-trade
-
-print('Getting your current position mode (One-way or Hedge Mode):')
-response = exchange.fapiPrivate_get_positionside_dual()
-if response['dualSidePosition']:
-    print('You are in Hedge Mode')
-else:
-    print('You are in One-way Mode')
-
-print('----------------------------------------------------------------------')
+#
+# exchange.verbose = True  # UNCOMMENT THIS AFTER LOADING THE MARKETS FOR DEBUGGING
+#
+# print('----------------------------------------------------------------------')
+#
+# print('Fetching your balance:')
+# response = exchange.fetch_balance()
+# pprint(response['total'])  # make sure you have enough futures margin...
+# # pprint(response['info'])  # more details
+#
+# print('----------------------------------------------------------------------')
+#
+# # https://binance-docs.github.io/apidocs/futures/en/#position-information-v2-user_data
+#
+# print('Getting your positions:')
+# response = exchange.fapiPrivateV2_get_positionrisk()
+# #print(table1(response))
+#
+# print('----------------------------------------------------------------------')
+#
+# # https://binance-docs.github.io/apidocs/futures/en/#change-position-mode-trade
+#
+# print('Getting your current position mode (One-way or Hedge Mode):')
+# response = exchange.fapiPrivate_get_positionside_dual()
+# if response['dualSidePosition']:
+#     print('You are in Hedge Mode')
+# else:
+#     print('You are in One-way Mode')
+#
+# print('----------------------------------------------------------------------')
 
 # print('Setting your position mode to One-way:')
 # response = exchange.fapiPrivate_post_positionside_dual({
