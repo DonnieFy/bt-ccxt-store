@@ -30,8 +30,8 @@ class MyData:
         self.exchange = exchange
         self.logger = logger
         self.debug = debug
-        self._pnt_15 = None
-        self._pnt_30 = None
+        self._pnt_15 = [0] * 3
+        self._pnt_30 = [0] * 3
         self._last_ts = 0
         self._data = []
         self._final_close = None
@@ -42,15 +42,21 @@ class MyData:
     def price(self):
         return self._final_close
 
-    def pnt_15(self):
-        if self.debug:
+    def need_buy(self):
+        filters = []
+        for i in range(3):
+            pnt_15 = self._pnt_15[i]
+            pnt_30 = self._pnt_30[i]
+            if 0.04 <= pnt_15 <= 0.08:
+                pnt_15
+            elif 0.04 <= pnt_30 <= 0.08:
+                filters.append(pnt_30)
+        res = len(filters) == 3
+        if res:
             self.logger.log('symbol: {}, pnt_15: {}'.format(self.symbol, self._pnt_15))
-        return self._pnt_15
-
-    def pnt_30(self):
-        if self.debug:
             self.logger.log('symbol: {}, pnt_30: {}'.format(self.symbol, self._pnt_30))
-        return self._pnt_30
+
+        return res
 
     def fetch_data(self, since=None):
         if since is None:
@@ -74,13 +80,19 @@ class MyData:
                 self._last_ts = tstamp
 
         count = len(self._data)
-        if count > 30:
-            self._data = self._data[count-30:]
-            ohlcv0 = self._load_ohlcv(self._data[0])
-            ohlcv1 = self._load_ohlcv(self._data[14])
-            ohlcv2 = self._load_ohlcv(self._data[29])
-            self._pnt_30 = (ohlcv2['close'] - ohlcv0['close']) / ohlcv0['close']
-            self._pnt_15 = (ohlcv2['close'] - ohlcv1['close']) / ohlcv1['close']
+        if count > 33:
+            for i in range(3):
+                end_index = count - i - 1
+                ohlcv0 = self._load_ohlcv(self._data[end_index])
+                ohlcv1 = self._load_ohlcv(self._data[end_index - 15])
+                ohlcv2 = self._load_ohlcv(self._data[end_index - 30])
+                self._pnt_30[i] = (ohlcv0['close'] - ohlcv2['close']) / ohlcv2['close']
+                self._pnt_15[i] = (ohlcv0['close'] - ohlcv1['close']) / ohlcv1['close']
+            self._data = self._data[count-60:]
+        
+        if self.debug:
+            self.logger.log('Fetching: {}, 15: {}, 30: {}'.format(self.symbol, self._pnt_15, self._pnt_30))
+        
         self._final_close = self._data[len(self._data) - 1][4]
 
     def _load_ohlcv(self, ohlcv):
@@ -186,8 +198,8 @@ class MyBroker:
         self.position_prices[name] = None
         self.position_sizes[name] = None
         self.position_datas.remove(data)
-        trade = self.get_trade(name=name, order_id=orderid)
-        self.logger.log('OPERATION PROFIT, symbol: {}, pnl: {}'.format(name, trade['info']['realizedPnl']))
+        profit = self.get_profit(name=name, order_id=orderid)
+        self.logger.log('OPERATION PROFIT, symbol: {}, pnl: {}'.format(name, profit))
 
     # 关闭一个做多
     def close_sell(self, data, size, exectype):
@@ -197,8 +209,8 @@ class MyBroker:
         self.position_prices[name] = None
         self.position_sizes[name] = None
         self.position_datas.remove(data)
-        trade = self.get_trade(name=name, order_id=orderid)
-        self.logger.log('OPERATION PROFIT, symbol: {}, pnl: {}'.format(name, trade['info']['realizedPnl']))
+        profit = self.get_profit(name=name, order_id=orderid)
+        self.logger.log('OPERATION PROFIT, symbol: {}, pnl: {}'.format(name, profit))
 
     def _submit(self, symbol, exectype, side, amount, price):
         ret_ord = self.exchange.create_order(symbol=symbol, type=exectype, side=side, amount=amount, price=price)
@@ -210,15 +222,17 @@ class MyBroker:
         balance = self.exchange.fetch_balance()
         return balance['total']['USDT']
 
-    def get_trade(self, name, order_id):
+    def get_profit(self, name, order_id):
+        profit = 0
         for trade in self.exchange.fetch_my_trades(name):
             if trade['info']['orderId'] == order_id:
-                return trade
+                profit += trade['info']['realizedPnl']
+        return profit
 
 
 def main(debug=False):
     logger = MyLogger()
-    logger.log('初始化参数')
+    logger.log('init')
     with open('../params.json', 'r') as f:
         params = json.load(f)
 
@@ -231,12 +245,7 @@ def main(debug=False):
         }
     }
 
-    pre_buys_1 = []
-    pre_buys_2 = []
-    pre_sells_1 = []
-    pre_sells_2 = []
-
-    logger.log('开始程序')
+    logger.log('start')
 
     datas = dict()
     exchange = ccxt.binance(config)
@@ -247,14 +256,14 @@ def main(debug=False):
 
     btc = MyBTC(symbol='BTC/USDT', exchange=exchange, logger=logger, debug=debug)
     for market in markets:
-        if '_' in market or 'BUSD' in market:
+        if '_' in market:
             continue
         if market not in datas:
             datas[market] = MyData(symbol=market, exchange=exchange, logger=logger, debug=debug)
             exchange.set_leverage(leverage=10, symbol=market)
     broker = MyBroker(exchange=exchange, logger=logger)
 
-    logger.log('开始循环')
+    logger.log('loop')
 
     while True:
         buys = []
@@ -267,18 +276,14 @@ def main(debug=False):
             data.fetch_data()
             if broker.hold(data):
                 continue
-            pnt_15 = data.pnt_15()
-            pnt_30 = data.pnt_30()
             if long:
-                if 0.04 <= pnt_15 <= 0.08:
-                    logger  # do nothing
-                elif 0.04 <= pnt_30 <= 0.06:
+                if data.need_buy():
                     buys.append(data)
 
         total_value = broker.get_value()
         if len(buys) > 0 or len(sells) > 0:
             logger.log([x.name() for x in buys])
-            logger.log('账户价值：%s' % (total_value,))
+            logger.log('total value：%s' % (total_value,))
 
         current_date = datetime.utcnow()
 
@@ -299,24 +304,15 @@ def main(debug=False):
             ratio = total_value // 100
             total_value = 10 * ratio if ratio > 0 else 10
 
-        act_buys = list(filter(lambda x: x in pre_buys_1 and x in pre_buys_2, buys))
-        act_buys = act_buys[:count] if len(act_buys) > count else act_buys
-        for d in act_buys:
+        buys = buys[:count] if len(buys) > count else buys
+        for d in buys:
             ss = (total_value / d.price()) * 10
             broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
 
-        act_sells = list(filter(lambda x: x in pre_sells_1 and x in pre_sells_2, sells))
-        act_sells = act_sells[:count] if len(act_sells) > count else act_sells
-        for d in act_sells:
+        sells = sells[:count] if len(sells) > count else sells
+        for d in sells:
             ss = (total_value / d.price()) * 10
             broker.open_sell(data=d, size=ss, exectype='Market', date=current_date)
-
-        pre_buys_2 = pre_buys_1
-        pre_buys_1 = buys
-        pre_sells_2 = pre_sells_1
-        pre_sells_1 = sells
-
-        time.sleep(45)
 
 
 if __name__ == '__main__':
