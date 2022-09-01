@@ -275,6 +275,9 @@ def main(debug=False):
         for market in datas:
             data = datas[market]
             data.fetch_data()
+        
+        for market in datas:
+            data = datas[market]
             if broker.hold(data):
                 continue
             if long:
