@@ -65,7 +65,8 @@ class MyData:
         if self.debug:
             self.logger.log('Fetching: {}, TF: {}, Since: {}, Limit: {}'.format(self.symbol, '1m', since, 1000))
         data = sorted(self.exchange.fetch_ohlcv(self.symbol, timeframe='1m', since=since, limit=1000))
-        data.pop()  # 总是把最后一分钟的去掉，等下一分钟再算，避免闪烁
+        if len(data) > 0:
+            data.pop()  # 总是把最后一分钟的去掉，等下一分钟再算，避免闪烁
         for ohlcv in data:
             if None in ohlcv:
                 continue
@@ -89,11 +90,10 @@ class MyData:
                 self._pnt_30[i] = (ohlcv0['close'] - ohlcv2['close']) / ohlcv2['close']
                 self._pnt_15[i] = (ohlcv0['close'] - ohlcv1['close']) / ohlcv1['close']
             self._data = self._data[count-60:]
+            self._final_close = self._data[len(self._data) - 1][4]
         
         if self.debug:
             self.logger.log('Fetching: {}, 15: {}, 30: {}'.format(self.symbol, self._pnt_15, self._pnt_30))
-        
-        self._final_close = self._data[len(self._data) - 1][4]
 
     def _load_ohlcv(self, ohlcv):
         data = dict()
@@ -218,9 +218,9 @@ class MyBroker:
         self.logger.log('symbol: {}, side: {}, price: {}, size: {}'.format(symbol, side, price, amount))
         return ret_ord['id']
 
-    def get_value(self):
+    def get_value(self, currency='USDT'):
         balance = self.exchange.fetch_balance()
-        return balance['total']['USDT']
+        return balance['total'][currency]
 
     def get_profit(self, name, order_id):
         profit = 0
@@ -266,8 +266,9 @@ def main(debug=False):
     logger.log('loop')
 
     while True:
+        busd_buys = []
+        usdt_buys = []
         buys = []
-        sells = []
 
         btc.fetch_data()
         long = btc.long()
@@ -279,11 +280,17 @@ def main(debug=False):
             if long:
                 if data.need_buy():
                     buys.append(data)
+                    if 'BUSD' in data.name():
+                        busd_buys.append(data)
+                    else:
+                        usdt_buys.append(data)
 
-        total_value = broker.get_value()
-        if len(buys) > 0 or len(sells) > 0:
+        total_value_usdt = broker.get_value('USDT')
+        total_value_busd = broker.get_value('BUSD')
+        if len(busd_buys) > 0 or len(usdt_buys) > 0:
             logger.log([x.name() for x in buys])
-            logger.log('total value：%s' % (total_value,))
+            logger.log('total value usdt：%s' % (total_value_usdt,))
+            logger.log('total value busd：%s' % (total_value_busd,))
 
         current_date = datetime.utcnow()
 
@@ -298,21 +305,34 @@ def main(debug=False):
                 if interval >= 45 or d.price() >= broker.get_price(name) * 1.07:
                     broker.close_buy(data=d, size=size, exectype='Market')
 
-        count = 0
-        if long:
-            count = 10 - len(broker.holds())
-            ratio = total_value // 100
-            total_value = 10 * ratio if ratio > 0 else 10
+        count_usdt = 10
+        count_busd = 5
+        
+        holds = broker.holds()
+        for d in holds:
+            if 'BUSD' in d.name():
+                count_busd -= 1
+            else:
+                count_usdt -= 1
+        ratio_usdt = total_value_usdt // 100
+        ratio_busd = total_value_busd // 100
+        total_value_usdt = 10 * ratio_usdt if ratio_usdt > 0 else 10
+        total_value_busd = 10 * ratio_busd if ratio_busd > 0 else 10
+        
+        if count_usdt < 0:
+            count_usdt = 0
+        if count_busd < 0:
+            count_busd = 0
 
-        buys = buys[:count] if len(buys) > count else buys
-        for d in buys:
-            ss = (total_value / d.price()) * 10
+        usdt_buys = usdt_buys[:count_usdt] if len(usdt_buys) > count_usdt else usdt_buys
+        for d in usdt_buys:
+            ss = (total_value_usdt / d.price()) * 10
             broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
-
-        sells = sells[:count] if len(sells) > count else sells
-        for d in sells:
-            ss = (total_value / d.price()) * 10
-            broker.open_sell(data=d, size=ss, exectype='Market', date=current_date)
+        
+        busd_buys = busd_buys[:count_busd] if len(busd_buys) > count_busd else busd_buys
+        for d in busd_buys:
+            ss = (total_value_busd / d.price()) * 10
+            broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
 
 
 if __name__ == '__main__':
