@@ -226,7 +226,7 @@ class MyBroker:
         profit = 0
         for trade in self.exchange.fetch_my_trades(name):
             if trade['info']['orderId'] == order_id:
-                profit += trade['info']['realizedPnl']
+                profit += float(trade['info']['realizedPnl'])
         return profit
 
 
@@ -266,76 +266,82 @@ def main(debug=False):
     logger.log('loop')
 
     while True:
-        busd_buys = []
-        usdt_buys = []
-        buys = []
+        try:
+            busd_buys = []
+            usdt_buys = []
+            buys = []
 
-        btc.fetch_data()
-        long = btc.long()
-        for market in datas:
-            data = datas[market]
-            data.fetch_data()
-        
-        for market in datas:
-            data = datas[market]
-            if broker.hold(data):
-                continue
-            if long:
-                if data.need_buy():
-                    buys.append(data)
-                    if 'BUSD' in data.name():
-                        busd_buys.append(data)
-                    else:
-                        usdt_buys.append(data)
+            btc.fetch_data()
+            long = btc.long()
+            for market in datas:
+                data = datas[market]
+                data.fetch_data()
+            
+            for market in datas:
+                data = datas[market]
+                if broker.hold(data):
+                    continue
+                if long:
+                    if data.need_buy():
+                        buys.append(data)
+                        if 'BUSD' in data.name():
+                            busd_buys.append(data)
+                        else:
+                            usdt_buys.append(data)
 
-        total_value_usdt = broker.get_value('USDT')
-        total_value_busd = broker.get_value('BUSD')
-        if len(busd_buys) > 0 or len(usdt_buys) > 0:
-            logger.log([x.name() for x in buys])
-            logger.log('total value usdt：%s' % (total_value_usdt,))
-            logger.log('total value busd：%s' % (total_value_busd,))
+            total_value_usdt = broker.get_value('USDT')
+            total_value_busd = broker.get_value('BUSD')
+            if len(busd_buys) > 0 or len(usdt_buys) > 0:
+                logger.log([x.name() for x in buys])
+                logger.log('total value usdt：%s' % (total_value_usdt,))
+                logger.log('total value busd：%s' % (total_value_busd,))
 
-        current_date = datetime.utcnow()
+            current_date = datetime.utcnow()
 
-        for d in set(broker.holds()):
-            name = d.name()
-            size = broker.get_size(name=name)
-            interval = (current_date - broker.get_date(name)).seconds / 60
-            if size > 0:
-                if interval >= 45 or d.price() <= broker.get_price(name) * 0.93:
-                    broker.close_sell(data=d, size=size, exectype='Market')
-            else:
-                if interval >= 45 or d.price() >= broker.get_price(name) * 1.07:
-                    broker.close_buy(data=d, size=size, exectype='Market')
+            for d in set(broker.holds()):
+                name = d.name()
+                size = broker.get_size(name=name)
+                interval = (current_date - broker.get_date(name)).seconds / 60
+                if size > 0:
+                    if interval >= 45 or d.price() <= broker.get_price(name) * 0.93:
+                        broker.close_sell(data=d, size=size, exectype='Market')
+                else:
+                    if interval >= 45 or d.price() >= broker.get_price(name) * 1.07:
+                        broker.close_buy(data=d, size=size, exectype='Market')
 
-        count_usdt = 10
-        count_busd = 5
-        
-        holds = broker.holds()
-        for d in holds:
-            if 'BUSD' in d.name():
-                count_busd -= 1
-            else:
-                count_usdt -= 1
-        ratio_usdt = total_value_usdt // 100
-        ratio_busd = total_value_busd // 100
-        total_value_usdt = 10 * ratio_usdt if ratio_usdt > 0 else 10
-        total_value_busd = 10 * ratio_busd if ratio_busd > 0 else 10
-        
-        if count_usdt < 0:
-            count_usdt = 0
-        if count_busd < 0:
-            count_busd = 0
+            count_usdt = 10
+            count_busd = 5
+            
+            holds = broker.holds()
+            for d in holds:
+                if 'BUSD' in d.name():
+                    count_busd -= 1
+                else:
+                    count_usdt -= 1
+            ratio_usdt = total_value_usdt // 100
+            ratio_busd = total_value_busd // 100
+            total_value_usdt = 10 * ratio_usdt if ratio_usdt > 0 else 10
+            total_value_busd = 10 * ratio_busd if ratio_busd > 0 else 10
+            
+            if count_usdt < 0:
+                count_usdt = 0
+            if count_busd < 0:
+                count_busd = 0
 
-        usdt_buys = usdt_buys[:count_usdt] if len(usdt_buys) > count_usdt else usdt_buys
-        for d in usdt_buys:
-            ss = (total_value_usdt / d.price()) * 10
-            broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
-        
-        busd_buys = busd_buys[:count_busd] if len(busd_buys) > count_busd else busd_buys
-        for d in busd_buys:
-            ss = (total_value_busd / d.price()) * 10
-            broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
+            usdt_buys = usdt_buys[:count_usdt] if len(usdt_buys) > count_usdt else usdt_buys
+            for d in usdt_buys:
+                ss = (total_value_usdt / d.price()) * 10
+                broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
+            
+            busd_buys = busd_buys[:count_busd] if len(busd_buys) > count_busd else busd_buys
+            for d in busd_buys:
+                ss = (total_value_busd / d.price()) * 10
+                broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
+
+        except Exception as e:
+            logger.log("exception: %s" % e)
+
+
 
 
 if __name__ == '__main__':
