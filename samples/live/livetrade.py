@@ -52,7 +52,7 @@ class MyData:
             elif 0.04 <= pnt_30 <= 0.08:
                 filters.append(pnt_30)
         res = len(filters) == 3
-        if res:
+        if res or len(filters) > 0:
             self.logger.log('symbol: {}, pnt_15: {}'.format(self.symbol, self._pnt_15))
             self.logger.log('symbol: {}, pnt_30: {}'.format(self.symbol, self._pnt_30))
 
@@ -61,11 +61,13 @@ class MyData:
     def fetch_data(self, since=None):
         if since is None:
             fromdate = datetime.utcnow() - timedelta(minutes=60)
-            since = self._last_ts if self._last_ts > 0 else int((fromdate - datetime(1970, 1, 1)).total_seconds() * 1000)
+            since = self._last_ts if self._last_ts > 0 else int(
+                (fromdate - datetime(1970, 1, 1)).total_seconds() * 1000)
         if self.debug:
             self.logger.log('Fetching: {}, TF: {}, Since: {}, Limit: {}'.format(self.symbol, '1m', since, 1000))
         data = sorted(self.exchange.fetch_ohlcv(self.symbol, timeframe='1m', since=since, limit=1000))
         if len(data) > 0:
+            self._final_close = data[len(data) - 1][4]   # 价格用实时价格，止损时误差更小
             data.pop()  # 总是把最后一分钟的去掉，等下一分钟再算，避免闪烁
         for ohlcv in data:
             if None in ohlcv:
@@ -89,9 +91,8 @@ class MyData:
                 ohlcv2 = self._load_ohlcv(self._data[end_index - 30])
                 self._pnt_30[i] = (ohlcv0['close'] - ohlcv2['close']) / ohlcv2['close']
                 self._pnt_15[i] = (ohlcv0['close'] - ohlcv1['close']) / ohlcv1['close']
-            self._data = self._data[count-60:]
-            self._final_close = self._data[len(self._data) - 1][4]
-        
+            self._data = self._data[count - 60:]
+
         if self.debug:
             self.logger.log('Fetching: {}, 15: {}, 30: {}'.format(self.symbol, self._pnt_15, self._pnt_30))
 
@@ -118,11 +119,14 @@ class MyBTC:
         self._last_ts = 0
         self.sma = None
         self.final_close = None
+        self._long = False
 
     def long(self):
-        if self.debug:
+        _long = self.final_close >= self.sma
+        if self.debug or self._long != _long:
             self.logger.log('btc close: {}, sma: {}'.format(self.final_close, self.sma))
-        return self.final_close > self.sma
+        self._long = _long
+        return self._long
 
     def fetch_data(self):
         fromdate = datetime.utcnow() - timedelta(minutes=1500)
@@ -130,6 +134,7 @@ class MyBTC:
         if self.debug:
             self.logger.log('Fetching: {}, TF: {}, Since: {}, Limit: {}'.format(self.symbol, '15m', since, 1000))
         data = sorted(self.exchange.fetch_ohlcv(self.symbol, timeframe='15m', since=since, limit=1000))
+        self.final_close = data[len(data) - 1][4]
         data.pop()  # 总是把最后一分钟的去掉，等下一分钟再算，避免闪烁
         for ohlcv in data:
             if None in ohlcv:
@@ -141,12 +146,11 @@ class MyBTC:
 
         count = len(self._data)
         if count > 80:
-            self._data = self._data[count-80:]
+            self._data = self._data[count - 80:]
         close_sum = 0
         for ohlcv in self._data:
             close_sum += ohlcv[4]
-        self.sma = close_sum/80
-        self.final_close = self._data[79][4]
+        self.sma = close_sum / 80
 
 
 class MyBroker:
@@ -230,7 +234,7 @@ class MyBroker:
         return profit
 
 
-def main(debug=False):
+def main(debug=False, test=False):
     logger = MyLogger()
     logger.log('init')
     with open('../params.json', 'r') as f:
@@ -247,6 +251,7 @@ def main(debug=False):
 
     logger.log('start')
 
+    leverage = 15
     datas = dict()
     exchange = ccxt.binance(config)
     response = exchange.fapiPrivate_get_positionside_dual()
@@ -260,10 +265,15 @@ def main(debug=False):
             continue
         if market not in datas:
             datas[market] = MyData(symbol=market, exchange=exchange, logger=logger, debug=debug)
-            exchange.set_leverage(leverage=10, symbol=market)
+            exchange.set_leverage(leverage=leverage, symbol=market)
     broker = MyBroker(exchange=exchange, logger=logger)
 
     logger.log('loop')
+
+    long_interval = 45
+    long_stop_loss = 0.95
+    short_interval = 45
+    short_stop_loss = 1.05
 
     while True:
         try:
@@ -272,17 +282,17 @@ def main(debug=False):
             buys = []
 
             btc.fetch_data()
-            long = btc.long()
             for market in datas:
                 data = datas[market]
                 data.fetch_data()
-            
+
+            long = btc.long()
             for market in datas:
                 data = datas[market]
                 if broker.hold(data):
                     continue
                 if long:
-                    if data.need_buy():
+                    if data.need_buy() or (test and "BTC/" in data.name()):
                         buys.append(data)
                         if 'BUSD' in data.name():
                             busd_buys.append(data)
@@ -303,15 +313,15 @@ def main(debug=False):
                 size = broker.get_size(name=name)
                 interval = (current_date - broker.get_date(name)).seconds / 60
                 if size > 0:
-                    if interval >= 45 or d.price() <= broker.get_price(name) * 0.93:
+                    if interval >= long_interval or d.price() <= broker.get_price(name) * long_stop_loss or test:
                         broker.close_sell(data=d, size=size, exectype='Market')
                 else:
-                    if interval >= 45 or d.price() >= broker.get_price(name) * 1.07:
+                    if interval >= short_interval or d.price() >= broker.get_price(name) * short_stop_loss:
                         broker.close_buy(data=d, size=size, exectype='Market')
 
             count_usdt = 10
             count_busd = 5
-            
+
             holds = broker.holds()
             for d in holds:
                 if 'BUSD' in d.name():
@@ -322,7 +332,7 @@ def main(debug=False):
             ratio_busd = total_value_busd // 100
             total_value_usdt = 10 * ratio_usdt if ratio_usdt > 0 else 10
             total_value_busd = 10 * ratio_busd if ratio_busd > 0 else 10
-            
+
             if count_usdt < 0:
                 count_usdt = 0
             if count_busd < 0:
@@ -330,19 +340,20 @@ def main(debug=False):
 
             usdt_buys = usdt_buys[:count_usdt] if len(usdt_buys) > count_usdt else usdt_buys
             for d in usdt_buys:
-                ss = (total_value_usdt / d.price()) * 10
+                ss = (total_value_usdt / d.price()) * leverage
                 broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
-            
+
             busd_buys = busd_buys[:count_busd] if len(busd_buys) > count_busd else busd_buys
             for d in busd_buys:
-                ss = (total_value_busd / d.price()) * 10
+                ss = (total_value_busd / d.price()) * leverage
                 broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
 
         except Exception as e:
             logger.log("exception: %s" % e)
 
-
+        if len(buys) == 0:
+            test = False
 
 
 if __name__ == '__main__':
-    main(debug=False)
+    main(debug=False, test=False)
