@@ -5,7 +5,8 @@ import json
 import pytz
 from backtrader import Order
 
-inds = ['pnt_15', 'pnt_30', 'pnt_45', 'pnt_60']
+pnts = ['pnt_15', 'pnt_30', 'pnt_45', 'pnt_60']
+inds = ['high_15', 'high_30', 'high_45', 'high_60']
 levels = [0.03, 0.04, 0.05, 0.06, 0.07]
 times = ['0', '15', '30', '45', '60']
 
@@ -30,6 +31,10 @@ class TestStrategy(bt.Strategy):
         self.sma = bt.indicators.SMA(self.datas[0], period=80)
         for d in self.datas:
             self.inds[d] = dict()
+            self.inds[d]['high_15'] = bt.indicators.Highest(d.high, period=1)
+            self.inds[d]['high_30'] = bt.indicators.Highest(d.high, period=2)
+            self.inds[d]['high_45'] = bt.indicators.Highest(d.high, period=3)
+            self.inds[d]['high_60'] = bt.indicators.Highest(d.high, period=4)
             self.inds[d]['pnt_15'] = bt.indicators.PctChange(d.close, period=1)
             self.inds[d]['pnt_30'] = bt.indicators.PctChange(d.close, period=2)
             self.inds[d]['pnt_45'] = bt.indicators.PctChange(d.close, period=3)
@@ -45,8 +50,9 @@ class TestStrategy(bt.Strategy):
                     if d in buy_times:
                         self.add_buy_times(ind=ind, level=level, data=d)
                     elif not long:
-                        pnt = self.inds[d][ind][0]
-                        if pnt >= level:
+                        high = self.inds[d][ind][0]
+                        pnt = (d.close[0] - high) / high
+                        if pnt <= -level:
                             self.add_buy_times(ind=ind, level=level, data=d)
 
     def add_buy_times(self, ind, level, data):
@@ -61,7 +67,7 @@ class TestStrategy(bt.Strategy):
         else:
             time = buy_times[data]
             index = times.index(time)
-            pnt = self.inds[data][inds[index]][0]
+            pnt = self.inds[data][pnts[index]][0]
             index += 1
             self.log('{} 涨幅 {}，{} 分钟后涨幅 {}'.format(ind, level, times[index], pnt))
             key += '---' + times[index]
@@ -162,9 +168,9 @@ with open('../symbols.txt', 'r') as f:
 symbols.remove('BTCUSDT')
 symbols.insert(0, 'BTCUSDT')
 
-# removed = ['DUSKUSDT', 'ROSEUSDT', 'APEUSDT', 'GALUSDT', 'FTTUSDT', 'DARUSDT', 'OPUSDT', 'GMTUSDT', 'JASMYUSDT', 'API3USDT', 'WOOUSDT', 'FLOWUSDT', 'BNXUSDT', 'IMXUSDT']
-# for item in removed:
-#     symbols.remove(item)
+removed = ['DUSKUSDT', 'ROSEUSDT', 'APEUSDT', 'GALUSDT', 'FTTUSDT', 'DARUSDT', 'OPUSDT', 'GMTUSDT', 'JASMYUSDT', 'API3USDT', 'WOOUSDT', 'FLOWUSDT', 'BNXUSDT', 'IMXUSDT']
+for item in removed:
+    symbols.remove(item)
 cerebro = bt.Cerebro(runonce=True)
 
 
@@ -191,8 +197,8 @@ store = CCXTStore(exchange='binance', currency='USDT', config=config, retries=5,
 
 # Get our data
 # Drop newest will prevent us from loading partial data from incomplete candles
-hist_start_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 100)
-hist_end_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 1)
+hist_start_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 200)
+hist_end_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 100)
 data0 = None
 
 for v in symbols:

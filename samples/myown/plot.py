@@ -22,51 +22,67 @@ class TestStrategy(bt.Strategy):
         self.logger = logging.getLogger()
         self.logger.setLevel(logging.INFO)
         self.pre_buys = []
-        self.pre_buys2 = []
         self.pre_sells = []
-        self.pre_sells2 = []
-
-        self.avg_pnt = None
-        self.up_count = 0
-        self.down_count = 0
-        handler = logging.FileHandler('../logs/logfile2.log', encoding='UTF-8')
+        handler = logging.FileHandler('logfile.log', encoding='UTF-8')
         handler.setLevel(logging.INFO)
         self.logger.addHandler(handler)
-        self.sma = bt.indicators.SMA(self.datas[0], period=1200)
-        self.high = bt.indicators.Highest(self.datas[0].high, period=45)
-        self.low = bt.indicators.Lowest(self.datas[0].low, period=45)
         for d in self.datas:
             self.inds[d] = dict()
-            self.inds[d]['pnt_15'] = bt.indicators.PctChange(d.close, period=15)
-            self.inds[d]['pnt_30'] = bt.indicators.PctChange(d.close, period=30)
-            # self.inds[d]['pnt_45'] = bt.indicators.PctChange(d.close, period=45)
+            self.inds[d]['pnt'] = bt.indicators.PctChange(d.close, period=15)
+            self.inds[d]['change'] = bt.indicators.PctChange(d.close, period=1)
+            self.inds[d]['high'] = bt.indicators.Highest(d.high, period=15)
+            self.inds[d]['low'] = bt.indicators.Lowest(d.low, period=15)
+            self.inds[d]['high_close'] = bt.indicators.Highest(d.close, period=100)
+            self.inds[d]['low_close'] = bt.indicators.Lowest(d.close, period=100)
+            self.inds[d]['atr'] = bt.indicators.AverageTrueRange(d, period=15)
 
     def next(self):
+        pnts = []
+        self.pnts.clear()
+        for d in self.datas:
+            pnt = self.inds[d]['pnt'][0]
+            pnts.append(pnt)
+            self.pnts[d._name] = pnt
+        sorted_pnts = sorted(enumerate(pnts), key=lambda x: x[1], reverse=True)
+        inxs = [i[0] for i in sorted_pnts]
+
         buys = []
         sells = []
-        self.pnts.clear()
-
-        long = self.datas[0].close[0] >= self.sma[0]
-        for d in self.datas:
-            if d in self.position_datas:
-                continue
-            pnt_15 = self.inds[d]['pnt_15'][0]
-            pnt_30 = self.inds[d]['pnt_30'][0]
-            # pnt_45 = self.inds[d]['pnt_45'][0]
-            if long:
-                if 0.04 <= pnt_15 <= 0.08:
-                    #buys.append(d)
-                    self.pnts[d._name] = pnt_15
-                elif 0.04 <= pnt_30 <= 0.08:
+        for idx in inxs:
+            d = self.datas[idx]
+            pnt = self.pnts[d._name]
+            # 15分钟累计涨幅>2，100分钟新高，上影小于2个点
+            if pnt >= 0.02:
+                atr = self.inds[d]['atr'][0]
+                if atr <= d.close[0] * 0.01 and \
+                    self.inds[d]['pnt'][-15] > 0.02 and d.close[0] >= self.inds[d]['high_close'][0] and \
+                        d.close[0] >= self.inds[d]['high'] * 0.97:
                     buys.append(d)
-                    self.pnts[d._name] = pnt_30
+            else:
+                break
+        for idx in reversed(inxs):
+            d = self.datas[idx]
+            pnt = self.pnts[d._name]
+            # 15分钟累计涨幅>2，100分钟新高，上影小于2个点
+            if pnt <= -0.02:
+                atr = self.inds[d]['atr'][0]
+                if atr <= d.close[0] * 0.01 and \
+                    self.inds[d]['pnt'][-15] < -0.02 and d.close[0] <= self.inds[d]['low_close'][0] and \
+                        d.close[0] <= self.inds[d]['low'] * 1.03:
+                    sells.append(d)
+            else:
+                break
+            # if pnt > 0.03 and d.close[0] >= self.inds[d]['high_close'][0] and d.close[0] >= self.inds[d]['high'] * 0.98:
+            #     buys.append(d)
+            # elif pnt < -0.03 and d.close[0] <= self.inds[d]['low_close'][0] and d.close[0] <= self.inds[d]['low'] * 1.02:
+            #     sells.append(d)
 
         total_value = self.broker.getvalue()
-        cash = self.broker.get_cash()
         if len(buys) > 0 or len(sells) > 0:
-            self.log('账户价值：%s, 现金：%s' % (total_value, cash))
+            self.log('账户价值：%s' % (total_value,))
 
         # 空头行情，清仓
+        short_time = len(sells) > len(buys)
         current_date = self.datas[0].datetime.datetime()
 
         for d in set(self.position_datas):
@@ -74,36 +90,40 @@ class TestStrategy(bt.Strategy):
             size = pos.size
             name = d._name
             interval = (current_date - self.position_dates[name]).seconds / 60
+            price = self.position_prices[name]
             if size > 0:
-                if interval >= 45 or d.close[0] <= self.position_prices[name] * 0.95:
+                if d.close[0] < price * 0.99 or (d.close[0] < price * 1.02 and interval > 15) or \
+                        d.close[0] < self.inds[d]['high'][0] * 0.97:
                     self.close_sell(data=d, size=size, exectype=Order.Market)
-            else:
-                if interval >= 60 or d.close[0] >= self.position_prices[name] * 1.07:
+                elif interval > 15:  # 可以加仓
+                    continue
+
+                buys.remove(d) if d in buys else None
+            elif size < 0:
+                if d.close[0] > price * 1.01 or (d.close[0] > price * 0.98 and interval > 15) or \
+                        d.close[0] > self.inds[d]['low'][0] * 1.03:
                     self.close_buy(data=d, size=size, exectype=Order.Market)
+                elif interval > 15:  # 可以加仓
+                    continue
 
-        atr = 0.01 / ((self.high[0] - self.low[0]) / self.datas[0].close[0])
-        if len(buys) > 0 or len(sells) > 0:
-            self.log('btc atr：{}, pnt: {}'.format((self.high[0] - self.low[0]), atr))
-        atr = 2 if atr > 2 else 0.2 if atr < 0.2 else atr
-        ratio = (total_value // 100000)
-        total_value = (5000 * ratio if ratio > 0 else 5000)
-        count = int(cash // total_value)
+                sells.remove(d) if d in sells else None
 
-        act_buys = list(filter(lambda x: x in self.pre_buys and x in self.pre_buys2, buys))
+        count = 10 - len(self.position_datas)
+        total_value = 5000
+
+        act_buys = list(filter(lambda x: x in self.pre_buys, buys))
         act_buys = act_buys[:count] if len(act_buys) > count else act_buys
         for d in act_buys:
             ss = total_value / d.close[0]
             self.open_buy(data=d, size=ss, exectype=Order.Market, date=current_date)
 
-        act_sells = list(filter(lambda x: x in self.pre_sells and x in self.pre_sells2, sells))
+        act_sells = list(filter(lambda x: x in self.pre_sells, sells))
         act_sells = act_sells[:count] if len(act_sells) > count else act_sells
         for d in act_sells:
             ss = total_value / d.close[0]
             self.open_sell(data=d, size=ss, exectype=Order.Market, date=current_date)
 
-        self.pre_buys2 = self.pre_buys
         self.pre_buys = buys
-        self.pre_sells2 = self.pre_sells
         self.pre_sells = sells
 
     def open_buy(self, data, size, exectype, date):
@@ -168,20 +188,22 @@ class TestStrategy(bt.Strategy):
             name = order.data._name
             if order.isbuy():
                 self.log(
-                    'BUY EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f, size %.2f, Name: %s' %
+                    'BUY EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f, size %.2f, Name: %s, pnt %.2f' %
                     (order.executed.price,
                      order.executed.value,
                      order.executed.comm,
                      order.executed.size,
-                     name))
+                     name,
+                     self.pnts[name]))
 
             else:  # Sell
-                self.log('SELL EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f, size %.2f, Name: %s' %
+                self.log('SELL EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f, size %.2f, Name: %s, pnt %.2f' %
                          (order.executed.price,
                           order.executed.value,
                           order.executed.comm,
                           order.executed.size,
-                          name))
+                          name,
+                          self.pnts[name]))
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
             ordertype = 'buy' if order.isbuy() else 'sell'
             status = 'canceled' if order.status == order.Canceled else \
@@ -202,56 +224,44 @@ with open('../params.json', 'r') as f:
     params = json.load(f)
 with open('../symbols.txt', 'r') as f:
     symbols = f.read().split('\n')
-symbols.remove("BTCUSDT")
-# removed = ['DUSKUSDT', 'ROSEUSDT', 'APEUSDT', 'GALUSDT', 'FTTUSDT', 'DARUSDT', 'OPUSDT', 'GMTUSDT', 'JASMYUSDT', 'API3USDT', 'WOOUSDT', 'FLOWUSDT', 'BNXUSDT', 'IMXUSDT']
-# for item in removed:
-#     symbols.remove(item)
-symbols.insert(0, 'BTCUSDT')
+symbols = ['WAVESUSDT']
+
+cerebro = bt.Cerebro(quicknotify=True)
 
 
-def main(fromdate, todate):
-    cerebro = bt.Cerebro(quicknotify=True)
+# Add the strategy
+cerebro.addstrategy(TestStrategy)
+cerebro.broker.setcash(100000)
+# 设置交易手续费为 0.1%
+cerebro.broker.setcommission(commission=0.004, mult=10)
 
-    # Add the strategy
-    cerebro.addobserver(bt.observers.DrawDown)
-    cerebro.addstrategy(TestStrategy)
-    cerebro.broker.setcash(100000)
-    # 设置交易手续费为 0.1%
-    cerebro.broker.setcommission(commission=0.0072, mult=15)
+# Create our store
+config = {'apiKey': params["binance"]["apikey"],
+          'secret': params["binance"]["secret"],
+          'enableRateLimit': True,
+          'options': {
+              'defaultType': 'future'
+            }
+          }
 
-    # Create our store
-    config = {'apiKey': params["binance"]["apikey"],
-              'secret': params["binance"]["secret"],
-              'enableRateLimit': True,
-              'options': {
-                  'defaultType': 'future'
-                }
-              }
 
-    # IMPORTANT NOTE - Kraken (and some other exchanges) will not return any values
-    # for get cash or value if You have never held any BNB coins in your account.
-    # So switch BNB to a coin you have funded previously if you get errors
-    store = CCXTStore(exchange='binance', currency='USDT', config=config, retries=5, debug=False)
+# IMPORTANT NOTE - Kraken (and some other exchanges) will not return any values
+# for get cash or value if You have never held any BNB coins in your account.
+# So switch BNB to a coin you have funded previously if you get errors
+store = CCXTStore(exchange='binance', currency='USDT', config=config, retries=5, debug=False)
 
-    # Get our data
-    # Drop newest will prevent us from loading partial data from incomplete candles
-    data0 = None
-    for v in symbols:
-        data = store.getdata(dataname=v, name=v, market='future',
-                         timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate,
-                         compression=1, ohlcv_limit=1000, debug=False)
-        # Add the feed
-        if data0 is None:
-            data0 = data
-        else:
-            data.plotinfo.plot = False
-        cerebro.adddata(data)
+# Get our data
+# Drop newest will prevent us from loading partial data from incomplete candles
+hist_start_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 92)
+hist_end_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 60)
+data0 = None
+for v in symbols:
+    data = store.getdata(dataname=v, name=v, market='future',
+                     timeframe=bt.TimeFrame.Minutes, fromdate=hist_start_date, todate=hist_end_date,
+                     compression=1, ohlcv_limit=1000, debug=False)
+    # Add the feed
+    cerebro.adddata(data)
 
-    # Run the strategy
-    cerebro.run()
-    cerebro.plot()
-
-if __name__ == '__main__':
-    hist_start_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 10)
-    hist_end_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 1)
-    main(fromdate=hist_start_date, todate=hist_end_date)
+# Run the strategy
+cerebro.run()
+cerebro.plot(style='candlestick')

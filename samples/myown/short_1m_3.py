@@ -29,16 +29,14 @@ class TestStrategy(bt.Strategy):
         self.avg_pnt = None
         self.up_count = 0
         self.down_count = 0
-        handler = logging.FileHandler('../logs/logfile2.log', encoding='UTF-8')
+        handler = logging.FileHandler('../logs/logfile3.log', encoding='UTF-8')
         handler.setLevel(logging.INFO)
         self.logger.addHandler(handler)
         self.sma = bt.indicators.SMA(self.datas[0], period=1200)
-        self.high = bt.indicators.Highest(self.datas[0].high, period=45)
-        self.low = bt.indicators.Lowest(self.datas[0].low, period=45)
         for d in self.datas:
             self.inds[d] = dict()
-            self.inds[d]['pnt_15'] = bt.indicators.PctChange(d.close, period=15)
-            self.inds[d]['pnt_30'] = bt.indicators.PctChange(d.close, period=30)
+            self.inds[d]['pnt_45'] = bt.indicators.PctChange(d.close, period=45)
+            self.inds[d]['pnt_60'] = bt.indicators.PctChange(d.close, period=60)
             # self.inds[d]['pnt_45'] = bt.indicators.PctChange(d.close, period=45)
 
     def next(self):
@@ -50,21 +48,20 @@ class TestStrategy(bt.Strategy):
         for d in self.datas:
             if d in self.position_datas:
                 continue
-            pnt_15 = self.inds[d]['pnt_15'][0]
-            pnt_30 = self.inds[d]['pnt_30'][0]
+            pnt_45 = self.inds[d]['pnt_45'][0]
+            pnt_60 = self.inds[d]['pnt_60'][0]
             # pnt_45 = self.inds[d]['pnt_45'][0]
-            if long:
-                if 0.04 <= pnt_15 <= 0.08:
-                    #buys.append(d)
-                    self.pnts[d._name] = pnt_15
-                elif 0.04 <= pnt_30 <= 0.08:
-                    buys.append(d)
-                    self.pnts[d._name] = pnt_30
+            if not long:
+                if -0.08 <= pnt_45 <= -0.05:
+                    sells.append(d)
+                    self.pnts[d._name] = pnt_45
+                elif -0.08 <= pnt_60 <= 0.05:
+                    sells.append(d)
+                    self.pnts[d._name] = pnt_60
 
         total_value = self.broker.getvalue()
-        cash = self.broker.get_cash()
-        if len(buys) > 0 or len(sells) > 0:
-            self.log('账户价值：%s, 现金：%s' % (total_value, cash))
+        if len(buys) or len(sells) > 0:
+            self.log('账户价值：%s' % (total_value,))
 
         # 空头行情，清仓
         current_date = self.datas[0].datetime.datetime()
@@ -75,19 +72,14 @@ class TestStrategy(bt.Strategy):
             name = d._name
             interval = (current_date - self.position_dates[name]).seconds / 60
             if size > 0:
-                if interval >= 45 or d.close[0] <= self.position_prices[name] * 0.95:
+                if interval >= 45 or d.close[0] <= self.position_prices[name] * 0.93:
                     self.close_sell(data=d, size=size, exectype=Order.Market)
             else:
                 if interval >= 60 or d.close[0] >= self.position_prices[name] * 1.07:
                     self.close_buy(data=d, size=size, exectype=Order.Market)
 
-        atr = 0.01 / ((self.high[0] - self.low[0]) / self.datas[0].close[0])
-        if len(buys) > 0 or len(sells) > 0:
-            self.log('btc atr：{}, pnt: {}'.format((self.high[0] - self.low[0]), atr))
-        atr = 2 if atr > 2 else 0.2 if atr < 0.2 else atr
-        ratio = (total_value // 100000)
-        total_value = (5000 * ratio if ratio > 0 else 5000)
-        count = int(cash // total_value)
+        count = 20 - len(self.position_datas)
+        total_value = 5000
 
         act_buys = list(filter(lambda x: x in self.pre_buys and x in self.pre_buys2, buys))
         act_buys = act_buys[:count] if len(act_buys) > count else act_buys
@@ -213,11 +205,11 @@ def main(fromdate, todate):
     cerebro = bt.Cerebro(quicknotify=True)
 
     # Add the strategy
-    cerebro.addobserver(bt.observers.DrawDown)
     cerebro.addstrategy(TestStrategy)
+    cerebro.addobserver(bt.observers.DrawDown)
     cerebro.broker.setcash(100000)
     # 设置交易手续费为 0.1%
-    cerebro.broker.setcommission(commission=0.0072, mult=15)
+    cerebro.broker.setcommission(commission=0.004, mult=10)
 
     # Create our store
     config = {'apiKey': params["binance"]["apikey"],
@@ -252,6 +244,6 @@ def main(fromdate, todate):
     cerebro.plot()
 
 if __name__ == '__main__':
-    hist_start_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 10)
+    hist_start_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 90)
     hist_end_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 1)
     main(fromdate=hist_start_date, todate=hist_end_date)

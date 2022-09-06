@@ -34,8 +34,13 @@ exchange = ccxt.binance({
 
 markets = exchange.load_markets()
 
-for market in markets:
-    print(market)
+market = markets['1000LUNC/BUSD']
+print('min amount: {}, precision amount: {}, min price: {}, precision price: {}'.format(market['limits']['amount']['min'], market['precision']['amount'], market['limits']['price']['min'], market['precision']['price']))
+market = markets['FOOTBALL/USDT']
+print('min amount: {}, precision amount: {}, min price: {}, precision price: {}'.format(market['limits']['amount']['min'], market['precision']['amount'], market['limits']['price']['min'], market['precision']['price']))
+market = markets['BTC/USDT']
+print('min amount: {}, precision amount: {}, min price: {}, precision price: {}'.format(market['limits']['amount']['min'], market['precision']['amount'], market['limits']['price']['min'], market['precision']['price']))
+
 symbol = 'BTC/USDT'  # YOUR SYMBOL HERE
 market = exchange.market(symbol)
 trades = exchange.fetch_my_trades(symbol)

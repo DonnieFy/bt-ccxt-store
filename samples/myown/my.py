@@ -164,14 +164,15 @@ class TestStrategy(bt.Strategy):
             d = self.datas[idx]
             pnt = self.pnts[d._name]
             pos = self.getposition(d).size
-            if i < 10:
-                if pnt > 0.02:
-                    buys.append(d)
+            if pnt > 0.02:
+                buys.append(d)
             if pos:
-                self.sell(data=d, size=pos, exectype=Order.Market)
+                self.sell(data=d, size=pos)
+        total_value = total_value * 0.1 / len(buys) if len(buys) > 0 else 0
         for d in buys:
-            ss = (total_value * 0.08) / d.close[0]
-            self.buy(data=d, size=ss, exectype=Order.Market)
+            ss = total_value / d.close[0]
+
+            self.buy(data=d, size=ss, price=d.close[0], stopprice=d.close[0]*0.99, stopexec=bt.Order.Stop)
 
         # if self.filter_inc_num > self.filter_dec_num:
         #     buys = []
@@ -282,6 +283,7 @@ with open('../symbols.txt', 'r') as f:
 
 cerebro = bt.Cerebro(quicknotify=True)
 cerebro.addobserver(bt.observers.DrawDown)
+cerebro.broker = bt.brokers.BackBroker(coc=True)
 
 # Add the strategy
 cerebro.addstrategy(TestStrategy)
