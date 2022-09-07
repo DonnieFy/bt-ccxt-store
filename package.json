@@ -1,5 +1,7 @@
 {
   "dependencies": {
-    "ccxt": "^1.93.13"
+    "ccxt": "^1.93.13",
+    "global-tunnel-ng": "^2.7.1",
+    "https-proxy-agent": "^5.0.1"
   }
 }
