@@ -88,6 +88,7 @@ class TestStrategy(bt.Strategy):
         ratio = (total_value // 100000)
         total_value = (5000 * ratio if ratio > 0 else 5000)
         count = int(cash // total_value)
+        count = 10 if count > 10 else count
 
         act_buys = list(filter(lambda x: x in self.pre_buys and x in self.pre_buys2, buys))
         act_buys = act_buys[:count] if len(act_buys) > count else act_buys
@@ -252,6 +253,6 @@ def main(fromdate, todate):
     cerebro.plot()
 
 if __name__ == '__main__':
-    hist_start_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 10)
+    hist_start_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 90)
     hist_end_date = datetime.utcnow() - timedelta(minutes=15 * 4 * 24 * 1)
     main(fromdate=hist_start_date, todate=hist_end_date)

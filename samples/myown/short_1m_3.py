@@ -32,7 +32,7 @@ class TestStrategy(bt.Strategy):
         handler = logging.FileHandler('../logs/logfile3.log', encoding='UTF-8')
         handler.setLevel(logging.INFO)
         self.logger.addHandler(handler)
-        self.sma = bt.indicators.SMA(self.datas[0], period=1200)
+        self.sma = bt.indicators.SMA(self.datas[0], period=300)
         for d in self.datas:
             self.inds[d] = dict()
             self.inds[d]['pnt_45'] = bt.indicators.PctChange(d.close, period=45)
@@ -44,18 +44,18 @@ class TestStrategy(bt.Strategy):
         sells = []
         self.pnts.clear()
 
-        long = self.datas[0].close[0] >= self.sma[0]
+        short = self.datas[0].close[0] <= self.sma[0]
         for d in self.datas:
             if d in self.position_datas:
                 continue
             pnt_45 = self.inds[d]['pnt_45'][0]
             pnt_60 = self.inds[d]['pnt_60'][0]
             # pnt_45 = self.inds[d]['pnt_45'][0]
-            if not long:
+            if short:
                 if -0.08 <= pnt_45 <= -0.05:
-                    sells.append(d)
+                    #sells.append(d)
                     self.pnts[d._name] = pnt_45
-                elif -0.08 <= pnt_60 <= 0.05:
+                elif -0.08 <= pnt_60 <= -0.04:
                     sells.append(d)
                     self.pnts[d._name] = pnt_60
 
