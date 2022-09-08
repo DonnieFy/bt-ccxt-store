@@ -1,87 +1,179 @@
-// 设置交易对与杠杆
-var pair = Symbol+'USDT'
-exchange.SetCurrency(Symbol+'_USDT')
-exchange.SetContractType("swap")
-exchange.IO("api", "POST", "/fapi/v1/leverage", "symbol="+pair+"&leverage="+5+"&timestamp="+Date.now())
+"use strict";
 
-//基本的交易精度限制
-var price_precision = null
-var tick_size = null
-var amount_precision = null 
-var min_qty = null
+const ccxt = require("ccxt");
+const fs = require("fs");
+const HttpsProxyAgent = require('https-proxy-agent');
+const socks = require('@luminati-io/socksv5')
 
-var exchange_info = JSON.parse(HttpQuery('https://fapi.binance.com/fapi/v1/exchangeInfo'))
-for (var i=0; i<exchange_info.symbols.length; i++){
-   if(exchange_info.symbols[i].baseAsset == Symbol){
-       tick_size = parseFloat(exchange_info.symbols[i].filters[0].tickSize)
-       price_precision = exchange_info.symbols[i].filters[0].tickSize.length > 2 ? exchange_info.symbols[i].filters[0].tickSize.length-2 : 0
-       amount_precision = exchange_info.symbols[i].filters[1].stepSize.length > 2 ? exchange_info.symbols[i].filters[1].stepSize.length-2 : 0
-       min_qty = parseFloat(exchange_info.symbols[i].filters[1].minQty)
-   }
+async function sleep(ms) {
+    let promise = new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
+    await promise;
 }
 
-//取消全部订单
-function CancelPendingOrders() {
-    var orders = _C(exchange.GetOrders);
-    for (var j = 0; j < orders.length; j++) {
-          exchange.CancelOrder(orders[j].Id, orders[j]);}
-}
+class MyBroker {
 
-function updatePosition(){//获取持仓,Symbol为交易对，加入交易对参数而不是返回全币种可以减少一次API占用
-    position = exchange.IO("api", "GET","/fapi/v2/positionRisk","timestamp="+Date.now()+"&symbol="+Symbol+"USDT")
-}
-function updateTrades(){//获取最近成交
-    trades = exchange.IO("api", "GET","/fapi/v1/trades","limit=200&timestamp="+Date.now()+"&symbol="+Symbol+"USDT")
+    constructor(exchange, symbol) {
+        this.exchange = exchange;
+        this.symbol = symbol;
+        this.position = 0;
+    }
 
-    var trades = _C(exchange.GetTrades)
-        if (self.prices.length == 0) {
-            while (trades.length == 0) {
-                trades = trades.concat(_C(exchange.GetTrades))
+    async buy(price, size) {
+        return this.submit(price, size, "buy");
+    }
+
+    async sell(price, size) {
+        return this.submit(price, size, "sell");
+    }
+
+    async submit(price, size, side) {
+        let exchange = this.exchange;
+        let symbol = this.symbol;
+        console.log("side: %s, price: %d, size: %d", side, price, size);
+        let order = await exchange.createLimitOrder(symbol, side, size, price);
+        let orderId = order.id;
+        let waitTime = 0;
+        while (waitTime < 300) {
+            await sleep(100);
+            order = await exchange.fetchOrder(orderId, symbol);
+            if (order.status == "closed") {
+                console.log("closed: %s", orderId);
+                this.position += (side == "buy" ? size : 0-size);
+                break;
             }
-            for (var i = 0; i < 15; i++) {
-                self.prices[i] = trades[trades.length - 1].Price
+            waitTime += 100;
+        }
+        if (order.status == "open") {
+           await this.cancelOrder(orderId, side);
+        }
+    }
+
+    async cancelOrder(orderId, side) {
+        console.log("cancel: %s", orderId);
+        while (true) {
+            try {
+                await this.exchange.cancelOrder(orderId, this.symbol);
+                break;
+            }
+            catch(e) {
+                if (e instanceof ccxt.OrderNotFound) {
+                    console.log("cancel fail, order executed: %s", orderId);
+                    this.position += (side == "buy" ? size : 0-size);
+                    break;
+                }
+                console.log("error: %s", e);
+                sleep(100);
             }
         }
-        self.vol = 0.7 * self.vol + 0.3 * _.reduce(trades, function(mem, trade) {
-            // Huobi not support trade.Id
-            if ((trade.Id > self.lastTradeId) || (trade.Id == 0 && trade.Time > self.lastTradeId)) {
-                self.lastTradeId = Math.max(trade.Id == 0 ? trade.Time : trade.Id, self.lastTradeId)
-                mem += trade.Amount
-            }
-            return mem
-        }, 0)
-}
-function updateDepth(){//获取深度
-    depth = exchange.IO("IO", "api", "GET","/fapi/v1/depth","timestamp="+Date.now()+"&symbol="+Symbol+"USDT")
+    }
 
-    var orderBook = _C(exchange.GetDepth)
-        self.orderBook = orderBook
-        if (orderBook.Bids.length < 3 || orderBook.Asks.length < 3) {
-            return
-        }
-        self.bidPrice = orderBook.Bids[0].Price * 0.618 + orderBook.Asks[0].Price * 0.382 + 0.01
-        self.askPrice = orderBook.Bids[0].Price * 0.382 + orderBook.Asks[0].Price * 0.618 - 0.01
-        self.prices.shift()
-        self.prices.push(_N((orderBook.Bids[0].Price + orderBook.Asks[0].Price) * 0.35 +
-            (orderBook.Bids[1].Price + orderBook.Asks[1].Price) * 0.1 +
-            (orderBook.Bids[2].Price + orderBook.Asks[2].Price) * 0.05))
-}
-
-function onTick(){
-    updateDepth() 
-    updateTrades() 
-    updatePosition() 
-    makeOrder() //计算下单价格、数量并下单
-    updateStatus() //更新状态信息
-}
-
-//主循环，休眠时间100ms，策略的循环延时通常在在30ms以内。
-function main() {
-    while(true){
-        if(Date.now() - update_loop_time > 100){
-            onTick()
-            update_loop_time = Date.now()
-        }
-        Sleep(1)
+    async getPosition() {
+        // let postions = await this.exchange.fetch_positions([this.symbol]);
+        // let info = postions[0].info;
+        // return parseFloat(info.positionAmt);
+        return this.position;
     }
 }
+
+
+; (async () => {
+    const httpsAgent = new HttpsProxyAgent("http://127.0.0.1:7890");
+
+    const agent = new socks.HttpsAgent({
+        proxyHost: 'ss.succez.com',
+        proxyPort: 1086,
+        auths: [socks.auth.None()]
+    })
+
+    const exchange = new ccxt.binance({
+        'apiKey': 'NHOkdZV92IY0sIcvdfswkc60SCyJAKTnrbgkHILGDHQW6NXGo87NwzQmBXXFGJSo',
+        'secret': 'W9ffpThUt5TLVqOJG2tNZeFyAhiDJqyUK3lX3IgRqBTEpcG2SuHRJFLQyvyCTpK0',
+        'agent': agent,
+        'options': {
+            'defaultType': 'future'
+        }
+    });
+
+    var symbol = "1000LUNC/BUSD";
+
+    let markets = await exchange.loadMarkets();
+    let broker = new MyBroker(exchange, symbol);
+    let market = markets[symbol];
+    let amountMin = parseFloat(market.limits.amount.min);
+    let amountPrecision = parseInt(market.precision.amount);
+    let priceMin = parseFloat(market.limits.price.min);
+    let pricePresision = parseInt(market.precision.price);
+
+    while (true) {
+        var time = exchange.milliseconds();
+        var trades = await exchange.fetchTrades(symbol, time - 5 * 1000, 1000)
+        trades = trades.reverse()
+        var buyCount = 0;
+        var sellCount = 0;
+        var maxPrice = 0;
+        var minPrice = 10;
+        for (let i = 0, len = trades.length; i < len; i++) {
+            let trade = trades[i];
+            if (trade.side == 'buy') {
+                buyCount += trade.amount;
+            }
+            else {
+                sellCount += trade.amount;
+            }
+            maxPrice = Math.max(maxPrice, trade.price);
+            minPrice = Math.min(minPrice, trade.price)
+            // let date = new Date(trade.timestamp);
+            // date.setMinutes(date.getMinutes() - date.getTimezoneOffset())
+            // console.log("time: %s, side: %s, price: %d, amount: %d, cost: %d, takerOrMaker: %s", date.toISOString(), trade.side, trade.price, trade.amount, trade.cost, trade.takerOrMaker)
+        }
+
+        let buyPrice = parseFloat((maxPrice * 0.382 + minPrice * 0.618).toPrecision(pricePresision));
+        let sellPrice = parseFloat((maxPrice * 0.618 + minPrice * 0.382).toPrecision(pricePresision));
+
+        // 已经有仓位了，优先退出
+        let positionAmt = await broker.getPosition();
+        if (positionAmt > 0) {
+            await broker.sell(sellPrice, positionAmt);
+            // 不管是否退出，开始下个循环
+            continue;
+        }
+        else if (positionAmt < 0) {
+            await broker.buy(sellPrice, -positionAmt);
+            continue;
+        }
+
+        var status = "none";
+        if (buyCount > sellCount * 1.8 && sellPrice > buyPrice * 1.0008) {
+            status = "long";
+            sellPrice += sellPrice - buyPrice
+        }
+        else if (sellCount > buyCount * 1.8 && buyPrice < sellPrice * 0.9992) {
+            status = "short";
+            buyPrice -= sellPrice - buyPrice
+        }
+        if (status == "none") {
+            await sleep(1000);
+            console.log('no signal, wait 1000ms');
+            console.log('buy amount: %d, sell amount: %d, buy price: %d, sell price: %d, max: %d, min: %d', buyCount, sellCount, buyPrice, sellPrice, maxPrice, minPrice);
+            continue;
+        }
+        let size = 10;
+        if (status == "long") {
+            await broker.buy(buyPrice, size);
+            let positionAmt = await broker.getPosition();
+            if (positionAmt > 0) {
+                await broker.sell(sellPrice, size);
+            }
+        }
+        else {
+            await broker.sell(sellPrice, size);
+            let positionAmt = await broker.getPosition();
+            if (positionAmt < 0) {
+                await broker.buy(buyPrice, size);
+            }
+        }
+    }
+
+})()

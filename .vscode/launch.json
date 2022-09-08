@@ -7,11 +7,20 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Launch Program",
+            "name": "test",
             "skipFiles": [
                 "<node_internals>/**"
             ],
             "program": "${workspaceFolder}\\myown\\test.js"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "quant",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}\\samples\\live\\quant.js"
         }
     ]
 }
