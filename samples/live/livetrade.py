@@ -91,7 +91,7 @@ class MyData:
                 ohlcv2 = self._load_ohlcv(self._data[end_index - 30])
                 self._pnt_30[i] = (ohlcv0['close'] - ohlcv2['close']) / ohlcv2['close']
                 self._pnt_15[i] = (ohlcv0['close'] - ohlcv1['close']) / ohlcv1['close']
-            self._data = self._data[count - 60:]
+            self._data = self._data[count - 45:]
 
         if self.debug:
             self.logger.log('Fetching: {}, 15: {}, 30: {}'.format(self.symbol, self._pnt_15, self._pnt_30))
