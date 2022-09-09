@@ -52,13 +52,14 @@ class MyData:
             elif 0.04 <= pnt_30 <= 0.08:
                 filters.append(pnt_30)
         res = len(filters) == 3
-        if res:
+        if res or len(filters) > 0:
             self.logger.log('symbol: {}, pnt_15: {}'.format(self.symbol, self._pnt_15))
             self.logger.log('symbol: {}, pnt_30: {}'.format(self.symbol, self._pnt_30))
 
         return res
 
     def fetch_data(self, since=None):
+        print("fetch data")
         if since is None:
             fromdate = datetime.utcnow() - timedelta(minutes=60)
             since = self._last_ts if self._last_ts > 0 else int(
@@ -67,7 +68,7 @@ class MyData:
             self.logger.log('Fetching: {}, TF: {}, Since: {}, Limit: {}'.format(self.symbol, '1m', since, 1000))
         data = sorted(self.exchange.fetch_ohlcv(self.symbol, timeframe='1m', since=since, limit=1000))
         if len(data) > 0:
-            self._final_close = data[len(data) - 1][4]  # 价格用实时价格，止损时误差更小
+            self._final_close = data[len(data) - 1][4]   # 价格用实时价格，止损时误差更小
             data.pop()  # 总是把最后一分钟的去掉，等下一分钟再算，避免闪烁
         for ohlcv in data:
             if None in ohlcv:
@@ -91,7 +92,10 @@ class MyData:
                 ohlcv2 = self._load_ohlcv(self._data[end_index - 30])
                 self._pnt_30[i] = (ohlcv0['close'] - ohlcv2['close']) / ohlcv2['close']
                 self._pnt_15[i] = (ohlcv0['close'] - ohlcv1['close']) / ohlcv1['close']
-            self._data = self._data[count - 60:]
+            print(self._data)
+            self._data = self._data[count - 45:]
+            print(self._data)
+        print(self._pnt_30)
 
         if self.debug:
             self.logger.log('Fetching: {}, 15: {}, 30: {}'.format(self.symbol, self._pnt_15, self._pnt_30))
@@ -134,6 +138,7 @@ class MyBTC:
         if self.debug:
             self.logger.log('Fetching: {}, TF: {}, Since: {}, Limit: {}'.format(self.symbol, '15m', since, 1000))
         data = sorted(self.exchange.fetch_ohlcv(self.symbol, timeframe='15m', since=since, limit=1000))
+        self.final_close = data[len(data) - 1][4]
         data.pop()  # 总是把最后一分钟的去掉，等下一分钟再算，避免闪烁
         for ohlcv in data:
             if None in ohlcv:
@@ -150,7 +155,6 @@ class MyBTC:
         for ohlcv in self._data:
             close_sum += ohlcv[4]
         self.sma = close_sum / 80
-        self.final_close = self._data[79][4]
 
 
 class MyBroker:
@@ -251,6 +255,7 @@ def main(debug=False, test=False):
 
     logger.log('start')
 
+    leverage = 15
     datas = dict()
     exchange = ccxt.binance(config)
     response = exchange.fapiPrivate_get_positionside_dual()
@@ -264,7 +269,7 @@ def main(debug=False, test=False):
             continue
         if market not in datas:
             datas[market] = MyData(symbol=market, exchange=exchange, logger=logger, debug=debug)
-            exchange.set_leverage(leverage=18, symbol=market)
+            exchange.set_leverage(leverage=leverage, symbol=market)
     broker = MyBroker(exchange=exchange, logger=logger)
 
     logger.log('loop')
@@ -275,83 +280,88 @@ def main(debug=False, test=False):
     short_stop_loss = 1.05
 
     while True:
-        try:
-            busd_buys = []
-            usdt_buys = []
-            buys = []
+        data = datas["1000LUNC/BUSD"]
+        data.fetch_data()
+        time.sleep(10)
 
-            btc.fetch_data()
-            for market in datas:
-                data = datas[market]
-                data.fetch_data()
+    # while True:
+    #     try:
+    #         busd_buys = []
+    #         usdt_buys = []
+    #         buys = []
 
-            long = btc.long()
-            for market in datas:
-                data = datas[market]
-                if broker.hold(data):
-                    continue
-                if long:
-                    if data.need_buy() or (test and "BTC/" in data.name()):
-                        buys.append(data)
-                        if 'BUSD' in data.name():
-                            busd_buys.append(data)
-                        else:
-                            usdt_buys.append(data)
+    #         btc.fetch_data()
+    #         for market in datas:
+    #             data = datas[market]
+    #             data.fetch_data()
 
-            total_value_usdt = broker.get_value('USDT')
-            total_value_busd = broker.get_value('BUSD')
-            if len(busd_buys) > 0 or len(usdt_buys) > 0:
-                logger.log([x.name() for x in buys])
-                logger.log('total value usdt：%s' % (total_value_usdt,))
-                logger.log('total value busd：%s' % (total_value_busd,))
+    #         long = btc.long()
+    #         for market in datas:
+    #             data = datas[market]
+    #             if broker.hold(data):
+    #                 continue
+    #             if long:
+    #                 if data.need_buy() or (test and "BTC/" in data.name()):
+    #                     buys.append(data)
+    #                     if 'BUSD' in data.name():
+    #                         busd_buys.append(data)
+    #                     else:
+    #                         usdt_buys.append(data)
 
-            current_date = datetime.utcnow()
+    #         total_value_usdt = broker.get_value('USDT')
+    #         total_value_busd = broker.get_value('BUSD')
+    #         if len(busd_buys) > 0 or len(usdt_buys) > 0:
+    #             logger.log([x.name() for x in buys])
+    #             logger.log('total value usdt：%s' % (total_value_usdt,))
+    #             logger.log('total value busd：%s' % (total_value_busd,))
 
-            for d in set(broker.holds()):
-                name = d.name()
-                size = broker.get_size(name=name)
-                interval = (current_date - broker.get_date(name)).seconds / 60
-                if size > 0:
-                    if interval >= long_interval or d.price() <= broker.get_price(name) * long_stop_loss or test:
-                        broker.close_sell(data=d, size=size, exectype='Market')
-                else:
-                    if interval >= short_interval or d.price() >= broker.get_price(name) * short_stop_loss:
-                        broker.close_buy(data=d, size=size, exectype='Market')
+    #         current_date = datetime.utcnow()
 
-            count_usdt = 10
-            count_busd = 5
+    #         for d in set(broker.holds()):
+    #             name = d.name()
+    #             size = broker.get_size(name=name)
+    #             interval = (current_date - broker.get_date(name)).seconds / 60
+    #             if size > 0:
+    #                 if interval >= long_interval or d.price() <= broker.get_price(name) * long_stop_loss or test:
+    #                     broker.close_sell(data=d, size=size, exectype='Market')
+    #             else:
+    #                 if interval >= short_interval or d.price() >= broker.get_price(name) * short_stop_loss:
+    #                     broker.close_buy(data=d, size=size, exectype='Market')
 
-            holds = broker.holds()
-            for d in holds:
-                if 'BUSD' in d.name():
-                    count_busd -= 1
-                else:
-                    count_usdt -= 1
-            ratio_usdt = total_value_usdt // 100
-            ratio_busd = total_value_busd // 100
-            total_value_usdt = 10 * ratio_usdt if ratio_usdt > 0 else 10
-            total_value_busd = 10 * ratio_busd if ratio_busd > 0 else 10
+    #         count_usdt = 10
+    #         count_busd = 5
 
-            if count_usdt < 0:
-                count_usdt = 0
-            if count_busd < 0:
-                count_busd = 0
+    #         holds = broker.holds()
+    #         for d in holds:
+    #             if 'BUSD' in d.name():
+    #                 count_busd -= 1
+    #             else:
+    #                 count_usdt -= 1
+    #         ratio_usdt = total_value_usdt // 100
+    #         ratio_busd = total_value_busd // 100
+    #         total_value_usdt = 10 * ratio_usdt if ratio_usdt > 0 else 10
+    #         total_value_busd = 10 * ratio_busd if ratio_busd > 0 else 10
 
-            usdt_buys = usdt_buys[:count_usdt] if len(usdt_buys) > count_usdt else usdt_buys
-            for d in usdt_buys:
-                ss = (total_value_usdt / d.price()) * 18
-                broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
+    #         if count_usdt < 0:
+    #             count_usdt = 0
+    #         if count_busd < 0:
+    #             count_busd = 0
 
-            busd_buys = busd_buys[:count_busd] if len(busd_buys) > count_busd else busd_buys
-            for d in busd_buys:
-                ss = (total_value_busd / d.price()) * 18
-                broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
+    #         usdt_buys = usdt_buys[:count_usdt] if len(usdt_buys) > count_usdt else usdt_buys
+    #         for d in usdt_buys:
+    #             ss = (total_value_usdt / d.price()) * leverage
+    #             broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
 
-        except Exception as e:
-            logger.log("exception: %s" % e)
+    #         busd_buys = busd_buys[:count_busd] if len(busd_buys) > count_busd else busd_buys
+    #         for d in busd_buys:
+    #             ss = (total_value_busd / d.price()) * leverage
+    #             broker.open_buy(data=d, size=ss, exectype='Market', date=current_date)
 
-        if len(buys) == 0:
-            test = False
+    #     except Exception as e:
+    #         logger.log("exception: %s" % e)
+
+    #     if len(buys) == 0:
+    #         test = False
 
 
 if __name__ == '__main__':
