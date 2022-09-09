@@ -26,12 +26,15 @@ const socks = require('@luminati-io/socksv5')
 
     var symbol = "1000LUNC/BUSD";
 
-    let trades = await exchange.fetchMyTrades(symbol);
+    let datas = await exchange.fetchOHLCV(symbol, '1m', 1662710760000, 1000);
+    console.log(JSON.stringify(datas));
+
+    // let trades = await exchange.fetchMyTrades(symbol);
   
-    orders = orders.reverse();
-    console.log(JSON.stringify(orders[0]));
+    // orders = orders.reverse();
+    // console.log(JSON.stringify(orders[0]));
     
-    console.log(JSON.stringify(orders[1]));
+    // console.log(JSON.stringify(orders[1]));
 
     // let postions = await exchange.fetch_positions([symbol]);
     // let info = postions[0];

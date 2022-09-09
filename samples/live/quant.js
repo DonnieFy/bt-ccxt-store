@@ -5,7 +5,6 @@ const fs = require("fs");
 const util = require("util");
 const HttpsProxyAgent = require('https-proxy-agent');
 const socks = require('@luminati-io/socksv5')
-require('log-timestamp');   
 
 async function sleep(ms) {
     let promise = new Promise((resolve) => {
@@ -21,13 +20,15 @@ class MyLogger {
     }
 
     log() {
-        let log = util.format.apply(null, arguments);
+        let date = new Date();
+        date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+        let log = '[' + date.toISOString() + '] ' + util.format.apply(null, arguments);
         this.log_file.write(log + '\n');
         console.log(log);
     }
 }
 
-let logger = new MyLogger('./quant.log');
+let logger = new MyLogger('quant.log');
 
 class MyBroker {
 
@@ -59,8 +60,8 @@ class MyBroker {
 
                 break;
             }
-            time += 200;
-            await sleep(200);
+            time += 150;
+            await sleep(150);
         }
         if (order.status == "open") {
             let canceled = await this.cancelOrder(orderId);
@@ -129,9 +130,16 @@ class MyBroker {
 
     let priceGrain = Math.pow(10, 0 - pricePresision);
 
+    let preBuyPrice = 0;
+    let preSellPrice = 0;
+    let preBuyRatio = 0;
+    let preSellRatio = 0;
+    let preMaxPrice = 0;
+    let preMinPrice = 0;
+
     while (true) {
         var time = exchange.milliseconds();
-        var trades = await exchange.fetchTrades(symbol, time - 3 * 1000, 1000)
+        var trades = await exchange.fetchTrades(symbol, time - 5 * 1000, 1000)
         trades = trades.reverse()
         var buyCount = 0;
         var sellCount = 0;
@@ -146,65 +154,72 @@ class MyBroker {
             else {
                 sellCount += trade.amount;
             }
-            sum += trade.price * trade.amount;
+            // sum += trade.price * trade.amount;
             maxPrice = Math.max(maxPrice, trade.price);
             minPrice = Math.min(minPrice, trade.price)
-            // let date = new Date(trade.timestamp);
-            // date.setMinutes(date.getMinutes() - date.getTimezoneOffset())
-            // logger.log("time: %s, side: %s, price: %d, amount: %d, cost: %d, takerOrMaker: %s", date.toISOString(), trade.side, trade.price, trade.amount, trade.cost, trade.takerOrMaker)
         }
 
-        let average = parseFloat((sum / (buyCount + sellCount)).toPrecision(pricePresision));
+        // let average = parseFloat((sum / (buyCount + sellCount)).toPrecision(pricePresision));
         let buyPrice = parseFloat((maxPrice * 0.382 + minPrice * 0.618).toPrecision(pricePresision));
         let sellPrice = parseFloat((maxPrice * 0.618 + minPrice * 0.382).toPrecision(pricePresision));
 
-        // 已经有仓位了，优先退出
-        let positionAmt = await broker.getPosition();
-        if (positionAmt > 0) {
-            await broker.sell(sellPrice, positionAmt, 1500);
-            // 不管是否退出，开始下个循环
-            continue;
-        }
-        else if (positionAmt < 0) {
-            await broker.buy(sellPrice, -positionAmt, 1500);
-            continue;
-        }
+       // 多空分析
+        let buyRatio = buyCount / sellCount;
+        let sellRatio = sellCount/ buyCount;
 
         let status = "none";
-        let diff = maxPrice - minPrice
-        if (buyCount > sellCount * 2 && sellPrice > buyPrice * 1.001) {
+        if (buyRatio > 2 && preBuyRatio > 2) {
             status = "long";
-            buyPrice += priceGrain;
-            sellPrice = maxPrice - priceGrain;
         }
-        else if (sellCount > buyCount * 2 && buyPrice < sellPrice * 0.999) {
+        else if (sellRatio > 2 && preSellRatio > 2) {
             status = "short";
-            sellPrice -= priceGrain;
-            buyPrice = minPrice + priceGrain;
+        }
+        else if (maxPrice >= preMaxPrice && minPrice >= preMinPrice) {
+            status = "up";
+        }
+        else if (maxPrice <= preMaxPrice && minPrice <= preMinPrice) {
+            status = "down";
         }
         logger.log('buy amount: %d, sell amount: %d, buy price: %d, sell price: %d, max: %d, min: %d, status: %s', buyCount, sellCount, buyPrice, sellPrice, maxPrice, minPrice, status);
-        if (status == "none") {
-            await sleep(1000);
-            // logger.log('no signal, wait 1000ms');
-            continue;
+       
+        preBuyPrice = buyPrice;
+        preSellPrice = sellPrice;
+        preBuyRatio = buyRatio;
+        preSellRatio = sellRatio;
+        preMinPrice = minPrice;
+        preMaxPrice = maxPrice;
+
+        // 执行订单
+        // 已经有仓位了，优先退出，并且不管是否退出，开始下个循环
+        let positionAmt = await broker.getPosition();
+        let trading = false;
+        if (positionAmt > 0) {
+            if (status != "long" && status != "up") {
+                trading = await broker.sell(sellPrice, positionAmt, 1500);
+            }
         }
-        let size = 200;
-        let trading = true;
-        while (trading) {
+        else if (positionAmt < 0) {
+            if (status != "short" && status != "down") {
+                trading = await broker.buy(buyPrice, -positionAmt, 1500);
+            }
+        }
+        else {
+            let size = 200;
+            let aggressive = maxPrice > minPrice * 1.003;
+
             if (status == "long") {
-                trading = await broker.buy(buyPrice, size, 2000);
-                let positionAmt = await broker.getPosition();
-                if (positionAmt > 0) {
-                    trading = await broker.sell(sellPrice, size, 3000);
-                }
+                let extra = (buyRatio.toPrecision(1)) * priceGrain;
+                let price = aggressive ? maxPrice : Math.min(maxPrice, buyPrice + extra);
+                trading = await broker.buy(price, size, 1500);
             }
-            else {
-                trading = await broker.sell(sellPrice, size, 2000);
-                let positionAmt = await broker.getPosition();
-                if (positionAmt < 0) {
-                    trading = await broker.buy(buyPrice, size, 3000);
-                }
+            else if (status == "short") {
+                let extra = (sellRatio.toPrecision(1)) * priceGrain;
+                let price = aggressive ? minPrice : Math.max(minPrice, sellPrice - extra);
+                trading = await broker.sell(price, size, 1500);
             }
+        }
+        if (!trading) {
+            await sleep(1000);
         }
     }
 
