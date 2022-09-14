@@ -251,7 +251,7 @@ def main(debug=False, test=False):
 
     logger.log('start')
 
-    leverage = 15
+    leverage = 10
     datas = dict()
     exchange = ccxt.binance(config)
     response = exchange.fapiPrivate_get_positionside_dual()
@@ -320,7 +320,7 @@ def main(debug=False, test=False):
                         broker.close_buy(data=d, size=size, exectype='Market')
 
             count_usdt = 10
-            count_busd = 5
+            count_busd = 0
 
             holds = broker.holds()
             for d in holds:

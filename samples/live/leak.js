@@ -4,7 +4,6 @@ const ccxt = require("ccxt");
 const fs = require("fs");
 const util = require("util");
 // const HttpsProxyAgent = require('https-proxy-agent');
-// const socks = require('@luminati-io/socksv5')
 
 async function sleep(ms) {
     let promise = new Promise((resolve) => {
@@ -65,15 +64,15 @@ class MyBroker {
         this.symbol = symbol;
     }
 
-    async buy(price, size, waitTime) {
-        return this.submit(price, size, "buy", waitTime);
+    async buy(price, size, waitTime, cancel) {
+        return this.submit(price, size, "buy", waitTime, cancel);
     }
 
-    async sell(price, size, waitTime) {
-        return this.submit(price, size, "sell", waitTime);
+    async sell(price, size, waitTime, cancel) {
+        return this.submit(price, size, "sell", waitTime, cancel);
     }
 
-    async submit(price, size, side, waitTime) {
+    async submit(price, size, side, waitTime, cancel) {
         let exchange = this.exchange;
         let symbol = this.symbol;
         logger.log("side: %s, price: %d, size: %d", side, price, size);
@@ -91,11 +90,15 @@ class MyBroker {
             time += 150;
             await sleep(150);
         }
-        if (order.status == "open") {
+        let status = order.status;
+        if (status == 'open' && cancel) {
             let canceled = await this.cancelOrder(orderId);
-            return !canceled
+            status = canceled ? "canceled" : "closed";
         }
-        return order.status == "closed";
+        return {
+            orderId: orderId,
+            status: status
+        };
     }
 
     async cancelOrder(orderId) {
@@ -130,136 +133,124 @@ class MyBroker {
 
 ; (async () => {
     // const httpsAgent = new HttpsProxyAgent("http://127.0.0.1:7890");
-
-    // const agent = new socks.HttpsAgent({
-    //     proxyHost: 'ss.succez.com',
-    //     proxyPort: 1086,
-    //     auths: [socks.auth.None()]
-    // })
-
     const exchange = new ccxt.binance({
         'apiKey': 'NHOkdZV92IY0sIcvdfswkc60SCyJAKTnrbgkHILGDHQW6NXGo87NwzQmBXXFGJSo',
         'secret': 'W9ffpThUt5TLVqOJG2tNZeFyAhiDJqyUK3lX3IgRqBTEpcG2SuHRJFLQyvyCTpK0',
-        //    'agent': httpsAgent,
         'options': {
             'defaultType': 'future'
-        }
+        },
+        // "agent": httpsAgent
     });
 
     var symbol = "LUNA2/BUSD";
 
     let markets = await exchange.loadMarkets();
-    let broker = new MyBroker(exchange, symbol);
     let market = markets[symbol];
-    let amountMin = parseFloat(market.limits.amount.min);
-    let amountPrecision = parseInt(market.precision.amount);
-    let priceMin = parseFloat(market.limits.price.min);
     let pricePresision = parseInt(market.precision.price) + 1;
+    
+    let broker = new MyBroker(exchange, symbol);
 
     let priceGrain = Math.pow(10, 0 - pricePresision);
-    let preTime = 0;
-    let status = "none";
-    var buyCount = 0;
-    var sellCount = 0;
-    var preMaxPrice = 0;
-    var preMinPrice = 0;
-    var maxPrice = 0;
-    var minPrice = 100000;
-    let averageBuyPrice = buySum / buyCount;
-    let averageSellPrice = sellSum / sellCount;
+    let pnl = 0.00005;
+    let orderId = null;
 
     while (true) {
-        var startTime = exchange.milliseconds();
-        var trades = await exchange.fetchTrades(symbol, startTime - 3 * 1000, 100)
-        preTime = startTime;
-        buyCount = 0;
-        sellCount = 0;
-        maxPrice = 0;
-        minPrice = 100000;
-        var lastPrice = 0;
-        var buySum = 0;
-        var sellSum = 0;
-
-        for (let i = 0, len = trades.length; i < len; i++) {
+        let prices = []
+        var time = exchange.milliseconds();
+        var trades = await exchange.fetchTrades(symbol, time - 2*1000, 100);
+        let len = trades.length;
+        if (len < 8) {
+            continue;
+        } 
+        for (var i = 0; i < 8; i++) {
+            prices[i] = trades[len - 8 + i].price;
+        }
+        let maxPrice = 0;
+        let minPrice = 100000;
+        let amount = 0;
+        for (let i =0; i < len; i++) {
             let trade = trades[i];
-            lastPrice = trade.price;
-            if (trade.side == 'buy') {
-                buyCount += trade.amount;
-                buySum += lastPrice * trade.amount;
-            }
-            else {
-                sellCount += trade.amount;
-                sellSum += lastPrice * trade.amount;
-            }
-            maxPrice = Math.max(maxPrice, lastPrice);
-            minPrice = Math.min(minPrice, lastPrice)
+            maxPrice = Math.max(trade.price, maxPrice);
+            minPrice = Math.min(trade.price, minPrice);
+            amount += trade.amount;
         }
-        averageBuyPrice = buySum / buyCount;
-        averageSellPrice = sellSum / sellCount;
-
-        // 多空分析
-        // const orderbook = await exchange.fetchOrderBook(symbol)
-        status = "none";
-        let sum = sellSum + buySum;
-        if (preMaxPrice == 0) {
-
-        }
-        else if (buySum > sum * 0.618) {
-            status = "up";
-        }
-        else if (sellSum > sum * 0.618) {
-            status = "down";
-        }
-
-        logger.log('buy sum: %d, sell sum: %d, buy average: %d, sell average: %d, max: %d, min: %d, status: %s', buySum, sellSum, averageBuyPrice, averageSellPrice, maxPrice, minPrice, status);
 
         // 计算订单薄
         // let average = parseFloat((sum / (buyCount + sellCount)).toPrecision(pricePresision));
-        // const orderbook = await exchange.fetchOrderBook(symbol, 50);
+        const orderbook = await exchange.fetchOrderBook(symbol, 50);
+        let bestBid = getBestBidPrice(orderbook.bids, amount/2);
+        let bestAsk = getBestAskPrice(orderbook.asks, amount/2);
+        let bid1 = orderbook.bids[0][0]
+        let ask1 = orderbook.asks[0][0]
 
-        // let bid1 = orderbook.bids[0][0]
-        // let ask1 = orderbook.asks[0][0]
+        let bidPrice = bestBid * 0.618 + bestAsk * 0.382 + priceGrain
+        let askPrice = bestBid * 0.382 + bestAsk * 0.618 - priceGrain
+        let lastPrice = parseFloat(((orderbook.bids[0][0] + orderbook.asks[0][0]) * 0.35 +
+            (orderbook.bids[1][0] + orderbook.asks[1][0]) * 0.1 +
+            (orderbook.bids[2][0] + orderbook.asks[2][0]) * 0.05).toPrecision(pricePresision));
 
-        let buyPrice = minPrice - preMinPrice + minPrice;
-        let sellPrice = maxPrice - preMaxPrice + maxPrice;
-
+        var status = "none";
+        var burstPrice = lastPrice * pnl
+        if (lastPrice - Math.max(...prices.slice(-6)) > burstPrice ||
+            lastPrice - Math.max(...prices.slice(-6, -1)) > burstPrice && lastPrice > prices[prices.length - 1]) {
+            status = "up";
+        }
+        else if (lastPrice - Math.min(...prices.slice(-6)) < -burstPrice ||
+            lastPrice - Math.min(...prices.slice(-6, -1)) < -burstPrice && lastPrice < prices[prices.length - 1]) {
+            status = "down";
+        }
+        logger.log("status: %s, bidPrice: %d, askPrice: %d, amount: %d, lastPrice: %d", status, bidPrice, askPrice, amount, lastPrice);
+    
+        if (orderId) {
+            await broker.cancelOrder(orderId);
+            orderId = null;
+        }
         // 执行订单
         // 已经有仓位了，优先退出，并且不管是否退出，开始下个循环
         let positionAmt = await broker.getPosition();
         let trading = false;
         if (positionAmt > 0) {
-            let price = sellPrice
-            trading = await broker.sell(price, positionAmt, 500);
+            let price = status == 'up' ? askPrice : ask1;
+            let order = await broker.sell(price, positionAmt, 500, false);
+            if (order.status == "open") {
+                orderId = order.orderId;
+            }
+            trading = true;
         }
         else if (positionAmt < 0) {
-            let price = buyPrice
-            trading = await broker.buy(price, -positionAmt, 500);
+            let price = status == "down" ? bidPrice : bid1;
+            let order = await broker.buy(price, -positionAmt, 500, false);
+            if (order.status == "open") {
+                orderId = order.orderId;
+            }
+            trading = true;
         }
         else {
-            let size = 1;
+            let size = 2;
             if (status == "up") {
-                if (sellPrice > buyPrice * 1.0008) {
-                    trading = await broker.buy(buyPrice, size, 500);
-                    if (trading) {
-                        trading = await broker.sell(sellPrice, size, 500);
+                let order = await broker.buy(bidPrice, size, 500, true);
+                if (order.status == 'closed') {
+                    order = await broker.sell(bidPrice*1.0008, size, 500, false);
+                    if (order.status == "open") {
+                        orderId = order.orderId;
                     }
                 }
+                trading = true;
             }
             else if (status == "down") {
-                if (buyPrice < sellPrice * 0.9992) {
-                    trading = await broker.sell(sellPrice, size, 500);
-                    if (trading) {
-                        trading = await broker.buy(buyPrice, size, 500);
+                let order = await broker.sell(askPrice, size, 500, true);
+                if (order.status == 'closed') {
+                    order = await broker.buy(askPrice*0.9992, size, 500, false);
+                    if (order.status == "open") {
+                        orderId = order.orderId;
                     }
                 }
+                trading = true;
             }
         }
-        logger.log("bid price: %d, ask price: %d", buyPrice, sellPrice);
-        if (!trading) {
+        if (!trading && positionAmt == 0) {
             await sleep(100);
         }
-        preMaxPrice = maxPrice;
-        preMinPrice = minPrice;
     }
 
 })()

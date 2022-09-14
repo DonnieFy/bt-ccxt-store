@@ -2,47 +2,70 @@
 
 const ccxt = require("ccxt");
 const fs = require("fs");
-const HttpsProxyAgent = require('https-proxy-agent');
-const socks = require('@luminati-io/socksv5')
+// const HttpsProxyAgent = require('https-proxy-agent');
+// const socks = require('@luminati-io/socksv5')
 
 
 ; (async () => {
-    const httpsAgent = new HttpsProxyAgent("http://127.0.0.1:7890");
+    // const httpsAgent = new HttpsProxyAgent("http://127.0.0.1:7890");
 
-    const agent = new socks.HttpsAgent ({
-        proxyHost: 'ss.succez.com',
-        proxyPort: 1086,
-        auths: [ socks.auth.None () ]
-    })
+    // const agent = new socks.HttpsAgent ({
+    //     proxyHost: 'ss.succez.com',
+    //     proxyPort: 1086,
+    //     auths: [ socks.auth.None () ]
+    // })
 
     const exchange = new ccxt.binance({
-        'apiKey': 'NHOkdZV92IY0sIcvdfswkc60SCyJAKTnrbgkHILGDHQW6NXGo87NwzQmBXXFGJSo',
-        'secret': 'W9ffpThUt5TLVqOJG2tNZeFyAhiDJqyUK3lX3IgRqBTEpcG2SuHRJFLQyvyCTpK0',
-        'agent': agent,
+        'apiKey': 'mRPdVN9i0bGptAJgshI5G35pabcL56A4ZmMyImBqeiLhdchHuplynlXAopB9ujUK',
+        'secret': 'gtcV6zAL4OHGyzr7ZFysyAhxkpTGqOuJpvQ82dca3bfdWKmVkGUNiBsohLrE2flS',
+        // 'agent': httpsAgent,
         'options': {
-            'defaultType': 'future'
+            'defaultType': 'spot'
         }
     });
 
-    var symbol = "1000LUNC/BUSD";
+    var symbol = "BTC/USDT";
 
-    let datas = await exchange.fetchOHLCV(symbol, '1m', 1662710760000, 1000);
-    console.log(JSON.stringify(datas));
+    let markets = await exchange.loadMarkets();
+    let market = markets[symbol];
+    let amountMin = parseFloat(market.limits.amount.min);
+    let amountPrecision = parseInt(market.precision.amount);
+    let priceMin = parseFloat(market.limits.price.min);
+    let pricePresision = parseInt(market.precision.price);
+    console.log(amountMin);
+    console.log(pricePresision);
 
-    // let trades = await exchange.fetchMyTrades(symbol);
+    let accounts = await exchange.fetchBalance();
+    console.log(accounts["free"]["BTC"]);
+    console.log(accounts["free"]["USDT"]);
+    console.log(accounts["BTC"]);
+    console.log(accounts["USDT"]);
+
+
+    // // console.log(JSON.stringify(datas));
+
+    // // let trades = await exchange.fetchMyTrades(symbol);
   
-    // orders = orders.reverse();
-    // console.log(JSON.stringify(orders[0]));
+    // // orders = orders.reverse();
+    // // console.log(JSON.stringify(orders[0]));
     
-    // console.log(JSON.stringify(orders[1]));
+    // // console.log(JSON.stringify(orders[1]));
 
-    // let postions = await exchange.fetch_positions([symbol]);
-    // let info = postions[0];
-    // let postionSize = parseFloat(info.positionAmt);
+    // // let postions = await exchange.fetch_positions([symbol]);
+    // // let info = postions[0];
+    // // let postionSize = parseFloat(info.positionAmt);
 
-    // console.log(JSON.stringify(info));
-
+    // // console.log(JSON.stringify(info));
+    // var time = exchange.milliseconds();
+    // var trades = await exchange.fetchTrades(symbol, time-1000, 100)
+    //  for (let i = 0, len = trades.length; i < len; i++) {
+    //     console.log("time: %s, amount: %d, price: %d",trades[i].datetime, trades[i].amount, trades[i].price);
+    // }
+    // console.log(trades.length);
     // const orderbook = await exchange.fetchOrderBook(symbol)
+    // console.log(orderbook.asks.length);
+    // console.log(orderbook.bids.length);
+
     // for (let i = 0; i < 10; i++) {
     //     let bid = orderbook.bids[i];
     //     console.log("bid: %d, amount: %d", bid[0], bid[1]);
@@ -52,8 +75,11 @@ const socks = require('@luminati-io/socksv5')
     //     console.log("ask: %d, amount: %d", ask[0], ask[1]);
     // }
 
-    // var time = exchange.milliseconds();
-    // var trades = await exchange.fetchTrades(symbol, time - 5*1000, 1000)
+    // var trades = await exchange.fetchTrades(symbol, time - 3000, 1000)
+    // console.log(new Date(time - 3000))
+    // for (let i = 0, len = trades.length; i < len; i++) {
+    //     console.log("time: %s, amount: %d, price: %d",trades[i].datetime, trades[i].amount, trades[i].price);
+    // }
     // trades = trades.reverse()
     // var buyCount = 0;
     // var sellCount = 0;
