@@ -77,7 +77,8 @@ class MyBroker {
         let symbol = this.symbol;
         logger.log("side: %s, price: %d, size: %d", side, price, size);
 
-        let order = await exchange.createLimitOrder(symbol, side, size, price);
+        let params = side == 'sell' ? { "reduceOnly": true } : null;
+        let order = await exchange.createLimitOrder(symbol, side, size, price, params);
         let orderId = order.id;
         let time = 0;
         while (time < waitTime) {
@@ -125,9 +126,9 @@ class MyBroker {
     }
 
     async getPosition() {
-        let balance = await this.exchange.fetchBalance ();
-        let size = balance.free["BTC"];
-        return parseFloat(size);
+        let postions = await this.exchange.fetch_positions([this.symbol]);
+        let info = postions[0].info;
+        return parseFloat(info.positionAmt);
     }
 }
 
@@ -295,12 +296,12 @@ class MyTrader {
         'apiKey': 'mRPdVN9i0bGptAJgshI5G35pabcL56A4ZmMyImBqeiLhdchHuplynlXAopB9ujUK',
         'secret': 'gtcV6zAL4OHGyzr7ZFysyAhxkpTGqOuJpvQ82dca3bfdWKmVkGUNiBsohLrE2flS',
         'options': {
-            'defaultType': 'spot'
+            'defaultType': 'future'
         },
         // "agent": httpsAgent
     });
 
-    var symbol = "BTC/USDT";
+    var symbol = "ANC/BUSD";
 
     let markets = await exchange.loadMarkets();
     let market = markets[symbol];
@@ -326,6 +327,15 @@ class MyTrader {
             var trades = await exchange.fetchTrades(symbol, time - 10 * 1000, 1000);
             trader.addTrades(trades);
         }
+        else {
+            let canceled = await broker.cancelOrder(orderId);
+            orderId = null;
+            if (!canceled) {
+                // 已经执行了，开始下一个买卖
+                closePrice > costPrice ? trader.win() : trader.lose();
+                continue;
+            }
+        }
         let status = trader.getStatus();
         let amount = trader.getAmount();
 
@@ -339,22 +349,14 @@ class MyTrader {
 
         let bidPrice = bestBid * 0.618 + bestAsk * 0.382 + priceGrain
         let askPrice = bestBid * 0.382 + bestAsk * 0.618 - priceGrain
-
-        if (orderId) {
-            let canceled = await broker.cancelOrder(orderId);
-            orderId = null;
-            if (!canceled) {
-                // 已经执行了，开始下一个买卖
-                closePrice > costPrice ? trader.win() : trader.lose();
-                continue;
-            }
-        }
         logger.log("status: %s, bidPrice: %d, askPrice: %d, amount: %d", status, bidPrice, askPrice, amount);
+
+        
         // 执行订单
         // 已经有仓位了，优先退出，并且不管是否退出，开始下个循环
         let positionAmt = await broker.getPosition();
         let trading = false;
-        if (positionAmt >= 0.0005) {
+        if (positionAmt > 0) {
             let price = status == 'up' ? askPrice : ask1;
             let order = await broker.sell(price, positionAmt, 200, false);
             if (order.status == "open") {
@@ -369,7 +371,7 @@ class MyTrader {
             trading = true;
         }
         else {
-            let size = 0.0005;
+            let size = 35;
             if (status == "up") {
                 let order = await broker.buy(bidPrice, size, 200, true);
                 if (order.status == 'closed') {
