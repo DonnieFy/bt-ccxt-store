@@ -237,14 +237,6 @@ class MyTrader {
                 }
             }
         }
-        let pct = buySum / (buySum + sellSum);
-        if (pct > 0.618) {
-            status = "up";
-        }
-        else if (pct < 0.382) {
-            status = "down";
-        }
-
         this.status = status;
         this.shape = shape;
         this.buyAmount = buyCount;
@@ -266,24 +258,16 @@ class MyTrader {
 
     logProfit() {
         let keys = new Set();
-        Object.keys(this.winTimes).forEach(function (value) {
+        Object.keys(this.winTimes).forEach(function(value) {
             keys.add(value)
         });
-        Object.keys(this.loseTimes).forEach(function (value) {
+        Object.keys(this.loseTimes).forEach(function(value) {
             keys.add(value)
         });
         let arr = Array.from(keys);
         for (let key of arr) {
             logger.log('status: %s, win times: %d, lose times: %d', key, this.winTimes[key], this.loseTimes[key]);
         }
-    }
-
-    getMax() {
-        return this.maxPrice;
-    }
-
-    getMin() {
-        return this.minPrice;
     }
 
     win() {
@@ -340,99 +324,67 @@ class MyTrader {
     let orderId = null;
     let costPrice = 0;
     let closePrice = 0;
-    let stopLossPrice = 0;
     let preTime = 0;
-    let cancelTimes = 0;
-    let status = "none";
-    let statusCount = 0;
 
     while (true) {
-        var time = exchange.milliseconds();
         if (!orderId) {
+            var time = exchange.milliseconds();
             if (time > preTime + 20 * 1000) {
                 trader.logProfit();
                 preTime = time;
+                var trades = await exchange.fetchTrades(symbol, time - 20 * 1000, 1000);
+                trader.addTrades(trades);
             }
-            var trades = await exchange.fetchTrades(symbol, time - 8 * 1000, 1000);
-            trader.addTrades(trades);
-            status = trader.getStatus();
         }
+        else {
+            let canceled = await broker.cancelOrder(orderId);
+            orderId = null;
+            if (!canceled) {
+                // 已经执行了，开始下一个买卖
+                closePrice > costPrice ? trader.win() : trader.lose();
+                continue;
+            }
+        }
+        let status = trader.getStatus();
         let amount = trader.getAmount();
 
         // 计算订单薄
         // let average = parseFloat((sum / (buyCount + sellCount)).toPrecision(pricePresision));
         const orderbook = await exchange.fetchOrderBook(symbol, 50);
-        let bestBid = getBestBidPrice(orderbook.bids, amount);
-        let bestAsk = getBestAskPrice(orderbook.asks, amount);
+        let bestBid = getBestBidPrice(orderbook.bids, amount / 4);
+        let bestAsk = getBestAskPrice(orderbook.asks, amount / 4);
         let bid1 = orderbook.bids[0][0]
         let ask1 = orderbook.asks[0][0]
 
         let bidPrice = bestBid * 0.618 + bestAsk * 0.382 + priceGrain
         let askPrice = bestBid * 0.382 + bestAsk * 0.618 - priceGrain
-        let maxPrice = trader.getMax();
-        let minPrice = trader.getMin();
-        let shortPrice = minPrice * 0.7 + maxPrice * 0.3;
-        let longPrice = minPrice * 0.3 + maxPrice * 0.7;
-
         logger.log("status: %s, bidPrice: %d, askPrice: %d, amount: %d", status, bidPrice, askPrice, amount);
 
+        
+        // 执行订单
+        // 已经有仓位了，优先退出，并且不管是否退出，开始下个循环
+        let positionAmt = await broker.getPosition();
         let trading = false;
-        if (orderId) {
-            let positionAmt = await broker.getPosition();
-            if (positionAmt == 0) {
-                orderId = null;
-                trader.complete(costPrice, closePrice);
-                await sleep(800);
-                continue;
+        if (positionAmt < 0) {
+            let price = status == "down" ? bidPrice : bid1;
+            let order = await broker.buy(price, -positionAmt, 200, false, true);
+            if (order.status == "open") {
+                orderId = order.orderId;
+                closePrice = price;
             }
-            let canceled = await broker.cancelOrder(orderId);
-            orderId = null;
-            if (!canceled) {
-                // 已经执行了，开始下一个买卖
-                trader.complete(costPrice, closePrice);
-                continue;
+            else {
+                trader.complete(costPrice, price);
+                costPrice = 0;
+                closePrice = 0;
             }
-
-            positionAmt = await broker.getPosition();
-            // 已经有仓位了，优先退出，并且不管是否退出，开始下个循环
-            if (positionAmt < 0) {
-                let price = bid1;
-                let order = await broker.buy(price, -positionAmt, 200, false, true);
-                if (order.status == "open") {
-                    orderId = order.orderId;
-                    closePrice = price;
-                }
-                else {
-                    trader.complete(costPrice, price);
-                    costPrice = 0;
-                    closePrice = 0;
-                }
-                trading = true;
-            }
-            else if (positionAmt > 0) {
-                let price = ask1;
-                let order = await broker.sell(price, positionAmt, 200, false, true);
-                if (order.status == "open") {
-                    orderId = order.orderId;
-                    closePrice = price;
-                }
-                else {
-                    trader.complete(costPrice, price);
-                    costPrice = 0;
-                    closePrice = 0;
-                }
-                trading = true;
-            }
+            trading = true;
         }
-        else if (askPrice >= bidPrice * 1.001){
+        else {
             let size = 3;
             if (status == "down") {
-                // bidPrice = bid1;
-                // askPrice = bid1 * 1.001;
-                let order = await broker.sell(askPrice, size, 300, true, false);
+                let order = await broker.sell(askPrice, size, 200, true, );
                 if (order.status == 'closed') {
-                    // stopLossPrice = askPrice + (askPrice - bidPrice) / 3;
-                    order = await broker.buy(bidPrice, size, 500, false, true);
+                    order = await broker.buy(bidPrice, size, 200, false);
                     if (order.status == "open") {
                         costPrice = askPrice;
                         closePrice = bidPrice;
@@ -446,31 +398,10 @@ class MyTrader {
                 }
                 trading = true;
             }
-            else if (status == 'up') {
-                // askPrice = ask1;
-                // bidPrice = ask1 * 0.999;
-                let order = await broker.buy(bidPrice, size, 300, true, false);
-                if (order.status == 'closed') {
-                    // stopLossPrice = bidPrice - (askPrice - bidPrice) / 2;
-                    order = await broker.sell(askPrice, size, 500, false, true);
-                    if (order.status == "open") {
-                        costPrice = bidPrice;
-                        closePrice = askPrice;
-                        orderId = order.orderId;
-                    }
-                    else {
-                        costPrice = 0;
-                        closePrice = 0;
-                        trader.complete(bidPrice, askPrice);
-                    }
-                }
-                trading = true;
-            }
         }
-        if (!trading) {
+        if (!trading && positionAmt == 0) {
             await sleep(100);
         }
-
     }
 
 })()
