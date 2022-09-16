@@ -107,3 +107,4 @@ samples/params.json
 samples/.DS_Store
 .DS_Store
 node_modules
+.history

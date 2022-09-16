@@ -2,29 +2,29 @@
 
 const ccxt = require("ccxt");
 const fs = require("fs");
-// const HttpsProxyAgent = require('https-proxy-agent');
-// const socks = require('@luminati-io/socksv5')
+const HttpsProxyAgent = require('https-proxy-agent');
+const socks = require('@luminati-io/socksv5')
 
 
 ; (async () => {
-    // const httpsAgent = new HttpsProxyAgent("http://127.0.0.1:7890");
+    const httpsAgent = new HttpsProxyAgent("http://127.0.0.1:7890");
 
-    // const agent = new socks.HttpsAgent ({
-    //     proxyHost: 'ss.succez.com',
-    //     proxyPort: 1086,
-    //     auths: [ socks.auth.None () ]
-    // })
+    const agent = new socks.HttpsAgent ({
+        proxyHost: 'ss.succez.com',
+        proxyPort: 1086,
+        auths: [ socks.auth.None () ]
+    })
 
     const exchange = new ccxt.binance({
-        'apiKey': 'mRPdVN9i0bGptAJgshI5G35pabcL56A4ZmMyImBqeiLhdchHuplynlXAopB9ujUK',
-        'secret': 'gtcV6zAL4OHGyzr7ZFysyAhxkpTGqOuJpvQ82dca3bfdWKmVkGUNiBsohLrE2flS',
-        // 'agent': httpsAgent,
+        'apiKey': 'NHOkdZV92IY0sIcvdfswkc60SCyJAKTnrbgkHILGDHQW6NXGo87NwzQmBXXFGJSo',
+        'secret': 'W9ffpThUt5TLVqOJG2tNZeFyAhiDJqyUK3lX3IgRqBTEpcG2SuHRJFLQyvyCTpK0',
+        'agent': httpsAgent,
         'options': {
-            'defaultType': 'spot'
+            'defaultType': 'future'
         }
     });
 
-    var symbol = "BTC/USDT";
+    var symbol = "AMB/BUSD";
 
     let markets = await exchange.loadMarkets();
     let market = markets[symbol];
@@ -32,14 +32,16 @@ const fs = require("fs");
     let amountPrecision = parseInt(market.precision.amount);
     let priceMin = parseFloat(market.limits.price.min);
     let pricePresision = parseInt(market.precision.price);
+    let priceGrain = parseFloat(Math.pow(10, 0 - pricePresision).toPrecision());
     console.log(amountMin);
     console.log(pricePresision);
+    console.log(priceGrain);
 
-    let accounts = await exchange.fetchBalance();
-    console.log(accounts["free"]["BTC"]);
-    console.log(accounts["free"]["USDT"]);
-    console.log(accounts["BTC"]);
-    console.log(accounts["USDT"]);
+    // let accounts = await exchange.fetchBalance();
+    // console.log(accounts["free"]["BTC"]);
+    // console.log(accounts["free"]["USDT"]);
+    // console.log(accounts["BTC"]);
+    // console.log(accounts["USDT"]);
 
 
     // // console.log(JSON.stringify(datas));
