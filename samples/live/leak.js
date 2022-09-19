@@ -134,25 +134,28 @@ class MyBroker {
 ; (async () => {
     // const httpsAgent = new HttpsProxyAgent("http://127.0.0.1:7890");
     const exchange = new ccxt.binance({
-        'apiKey': 'NHOkdZV92IY0sIcvdfswkc60SCyJAKTnrbgkHILGDHQW6NXGo87NwzQmBXXFGJSo',
-        'secret': 'W9ffpThUt5TLVqOJG2tNZeFyAhiDJqyUK3lX3IgRqBTEpcG2SuHRJFLQyvyCTpK0',
+        'apiKey': 'mRPdVN9i0bGptAJgshI5G35pabcL56A4ZmMyImBqeiLhdchHuplynlXAopB9ujUK',
+        'secret': 'gtcV6zAL4OHGyzr7ZFysyAhxkpTGqOuJpvQ82dca3bfdWKmVkGUNiBsohLrE2flS',
         'options': {
             'defaultType': 'future'
         },
         // "agent": httpsAgent
     });
 
-    var symbol = "LUNA2/BUSD";
+    var symbol = "PHB/BUSD";
 
     let markets = await exchange.loadMarkets();
     let market = markets[symbol];
-    let pricePresision = parseInt(market.precision.price) + 1;
+    let pricePresision = parseInt(market.precision.price);
     
     let broker = new MyBroker(exchange, symbol);
 
-    let priceGrain = Math.pow(10, 0 - pricePresision);
+    let priceGrain = parseFloat(Math.pow(10, 0 - pricePresision).toPrecision(pricePresision));
     let pnl = 0.00005;
     let orderId = null;
+    let numTick = 0;
+    let status = '';
+    let preStatus = '';
 
     while (true) {
         let prices = []
@@ -189,15 +192,17 @@ class MyBroker {
             (orderbook.bids[1][0] + orderbook.asks[1][0]) * 0.1 +
             (orderbook.bids[2][0] + orderbook.asks[2][0]) * 0.05).toPrecision(pricePresision));
 
-        var status = "none";
+        status = "none";
         var burstPrice = lastPrice * pnl
         if (lastPrice - Math.max(...prices.slice(-6)) > burstPrice ||
             lastPrice - Math.max(...prices.slice(-6, -1)) > burstPrice && lastPrice > prices[prices.length - 1]) {
             status = "up";
+            status == preStatus ? numTick++ : numTick=1;
         }
         else if (lastPrice - Math.min(...prices.slice(-6)) < -burstPrice ||
             lastPrice - Math.min(...prices.slice(-6, -1)) < -burstPrice && lastPrice < prices[prices.length - 1]) {
             status = "down";
+            status == preStatus ? numTick++ : numTick=1;
         }
         logger.log("status: %s, bidPrice: %d, askPrice: %d, amount: %d, lastPrice: %d", status, bidPrice, askPrice, amount, lastPrice);
     
@@ -225,8 +230,8 @@ class MyBroker {
             }
             trading = true;
         }
-        else {
-            let size = 2;
+        else if (numTick > 2){
+            let size = 5;
             if (status == "up") {
                 let order = await broker.buy(bidPrice, size, 500, true);
                 if (order.status == 'closed') {
@@ -251,6 +256,7 @@ class MyBroker {
         if (!trading && positionAmt == 0) {
             await sleep(100);
         }
+        preStatus = status;
     }
 
 })()
