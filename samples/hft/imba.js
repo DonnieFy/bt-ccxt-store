@@ -12,27 +12,36 @@ async function sleep(ms) {
     await promise;
 }
 
-function getOrderbookInfo(orderbook, orderbookPre, amount) {
+function getOrderbookInfo(orderbook, orderbookPre, amount, tradesInfo, priceGrain) {
     let bids = orderbook.bids;
     let asks = orderbook.asks;
     let accBidAmount = 0;
     let bid1 = bids[0][0];
     let ask1 = asks[0][0];
-    let mid = (bid1+ask1)/2;
-    let pressBuy = 0;
-    
+    let mid = (bid1 + ask1) / 2;
 
+    let maxSpread = tradesInfo.maxSpread;
+    let minSpread = tradesInfo.minSpread;
+
+    let bidAmount = amount;
+    let pressBid = 0;
     let bestBidPrice = bid1;
     let layeringBidPrice = bid1;
     let layeringBidAmount = 0;
     let imbaBid = 0;
     let bidsPre = orderbookPre.bids;
+    let accBidAmounts = [];
+
     for (let i = 0, len = bids.length; i < len; i++) {
         let bid = bids[i];
         accBidAmount += bid[1];
+        accBidAmounts[i] = accBidAmount;
         let bidPre = bidsPre[i];
         imbaBid += (bid[0] >= bidPre[0] ? 1 : 0) * bid[1] - (bid[0] <= bidPre[0] ? 1 : 0) * bidPre[1];
-        if (accBidAmount < amount) {
+        if (pressBid == 0 && (accBidAmount / (bid[0] - mid)) * minSpread > 1) {
+            pressBid = bid[0];
+        }
+        if (accBidAmount < bidAmount) {
             bestBidPrice = bid[0];
         }
         else if (bid[1] > amount) {
@@ -48,12 +57,19 @@ function getOrderbookInfo(orderbook, orderbookPre, amount) {
     let layeringAskAmount = 0;
     let imbaAsk = 0;
     let asksPre = orderbookPre.asks;
+    let pressAsk = 0;
+    let askAmount = amount;
+    let accAskAmounts = [];
     for (let i = 0, len = asks.length; i < len; i++) {
         let ask = asks[i];
         accAskAmount += ask[1];
+        accAskAmounts[i] = accAskAmount;
         let askPre = asksPre[i];
         imbaAsk += (ask[0] <= askPre[0] ? 1 : 0) * ask[1] - (ask[0] >= askPre[0] ? 1 : 0) * askPre[1];
-        if (accAskAmount < amount) {
+        if (pressAsk == 0 && (accAskAmount / (ask[0] - mid)) * maxSpread > 1) {
+            pressAsk = ask[0];
+        }
+        if (accAskAmount < askAmount) {
             bestAskPrice = ask[0];
         }
         else if (ask[1] > amount) {
@@ -62,16 +78,35 @@ function getOrderbookInfo(orderbook, orderbookPre, amount) {
             break;
         }
     }
+    pressBid = pressBid == 0 ? bid1 + priceGrain : pressBid;
+    pressAsk = pressAsk == 0 ? ask1 - priceGrain : pressAsk;
+    let imbalance = imbaBid - imbaAsk;
+
+    // if (imbalance > 0) {
+    //     let index = accAskAmounts.findIndex(function (accAmount) {
+    //         return accAmount > amount - imbalance;
+    //     });
+    //     bestAskPrice = index == 0 ? ask1 : asks[index - 1];
+    // }
+    // else {
+    //     let index = accBidAmounts.findIndex(function (accAmount) {
+    //         return accAmount > amount + imbalance;
+    //     });
+    //     bestBidPrice = index == 0 ? bid1 : bid1[index - 1];
+    // }
+
     return {
         bid1,
         ask1,
-        bestBidPrice,
+        bestBidPrice,  // 基于成交量计算
         bestAskPrice,
         layeringBidPrice,
         layeringBidAmount,
         layeringAskPrice,
         layeringAskAmount,
-        imbalance: imbaBid - imbaAsk
+        imbalance: imbaBid - imbaAsk,  // 订单不平衡
+        pressAsk,  // 基于价格最大变动速度和订单压力计算的买卖价
+        pressBid
     }
 }
 
@@ -79,6 +114,11 @@ function getTradesInfo(trades) {
     let amount = 0;
     let buyAmount = 0;
     let sellAmount = 0;
+    let maxSpread = 0;
+    let minSpread = 0;
+    let sumSpread = 0;
+    let pricePre = 0;
+
     for (let i = 0, len = trades.length; i < len; i++) {
         let trade = trades[i];
         if (trade.side == 'buy') {
@@ -87,11 +127,28 @@ function getTradesInfo(trades) {
         else {
             sellAmount += trade.amount;
         }
+        if (pricePre != 0) {
+            let spread = (trade.price - pricePre) / trade.amount;
+            maxSpread = Math.max(maxSpread, spread);
+            minSpread = Math.min(minSpread, spread);
+            sumSpread += spread;
+        }
+
+        pricePre = trade.price
     }
     amount = buyAmount + sellAmount;
     let overBuy = buyAmount / amount > 0.618;
     let overSell = sellAmount / amount > 0.618;
-    return { amount, buyAmount, sellAmount, overBuy, overSell };
+    return {
+        amount,
+        buyAmount,
+        sellAmount,
+        overBuy,
+        overSell,
+        maxSpread,
+        minSpread,
+        sumSpread
+    };
 }
 
 class MyLogger {
@@ -223,7 +280,7 @@ class MyBroker {
     let closePrice = 0;
     let preTime = 0;
     let status = "none";
-    let size = 5;
+    let size = 8;
     let preStatus = "";
 
     let tradesInfo;
@@ -232,6 +289,17 @@ class MyBroker {
     let orderbookInfoPre;
     let orderbookInfoPre1;
     let holdNumTick = 0; // 持仓时间
+    let orderbookPre;
+    let orderbook;
+
+    let layerStatus = '';
+    let layerStatusPre = '';
+    let position = 0;
+    let waitTime = 1000;
+    let shape = '';
+
+    let bidPrices = [];
+    let askPrices = [];
 
     function close(way) {
         broker.close(way, costPrice, closePrice);
@@ -242,150 +310,133 @@ class MyBroker {
     while (true) {
         try {
             var time = exchange.milliseconds();
-            if (!orderId) {
-                if (time > preTime + 4 * 1000) {
-                    preTime = time;
-                    var trades = await exchange.fetchTrades(symbol, time - 4 * 1000, 1000);
-                    tradesInfoPre = tradesInfo;
-                    tradesInfo = getTradesInfo(trades);
-                }
+            if (!orderId && position == 0) {
+                var trades = await exchange.fetchTrades(symbol, time - 4 * 1000, 1000);
+                tradesInfoPre = tradesInfo;
+                tradesInfo = getTradesInfo(trades);
                 holdNumTick = 0;
             }
             else {
                 holdNumTick++
             }
             // 计算订单薄
-            const orderbook = await exchange.fetchOrderBook(symbol, 50);
-            orderbookInfoPre1 = orderbookInfoPre
+            orderbookPre = orderbook;
+            orderbook = await exchange.fetchOrderBook(symbol, 50);
+            if (!orderbookPre) {
+                continue;
+            }
             orderbookInfoPre = orderbookInfo;
-            orderbookInfo = getOrderbookInfo(orderbook.bids, orderbook.asks, tradesInfo.amount * Math.pow(0.8, holdNumTick));
+            orderbookInfo = getOrderbookInfo(orderbook, orderbookPre, tradesInfo.amount/2, tradesInfo, priceGrain);
 
-            let bestBid = orderbookInfo.bestBidPrice + priceGrain;
-            let bestAsk = orderbookInfo.bestAskPrice - priceGrain;
+            logger.log('spread: %d, max spread %d, min spread %d, press bid: %d, press ask: %d, imba: %d',
+                tradesInfo.sumSpread, tradesInfo.maxSpread, tradesInfo.minSpread, orderbookInfo.pressBid, orderbookInfo.pressAsk, orderbookInfo.imbalance);
+            logger.log('layer bid: %d, amount: %d, layer ask: %d, amount: %d, bestBid: %d, bestAsk: %d, bid1: %d, ask1:%d',
+                orderbookInfo.layeringBidPrice, orderbookInfo.layeringBidAmount, orderbookInfo.layeringAskPrice, orderbookInfo.layeringAskAmount, orderbookInfo.bestBidPrice, orderbookInfo.bestAskPrice,
+                orderbookInfo.bid1, orderbookInfo.ask1);
+
+            layerStatusPre = layerStatus;
+            layerStatus = (orderbookInfo.layeringBidAmount > 0 ? '1' : '0') + (orderbookInfo.layeringAskAmount > 0 ? '1' : '0');
+
             let bid1 = orderbookInfo.bid1
             let ask1 = orderbookInfo.ask1
 
-            let askRatio = orderbookInfo.layeringAskPrice / orderbookInfo.bestAskPrice;
-            let bidRatio = orderbookInfo.layeringBidPrice / orderbookInfo.bestBidPrice;
-            let signal = askRatio + bidRatio - 2;
-
-            let askRatio1 = bestAsk / (bid1 + priceGrain);
-            let bidRatio1 = bestBid / (ask1 - priceGrain);
-            let signal1 = askRatio1 + bidRatio1 - 2;
-
-            let waitTime = 1500;
-            let shape = ''
+            let ratioBid = orderbookInfo.bestAskPrice/orderbookInfo.bestBidPrice;
+            let ratioAsk = orderbookInfo.bestBidPrice/orderbookInfo.bestAskPrice;
+            let bestBid = orderbookInfo.bestBidPrice + priceGrain;
+            let bestAsk = orderbookInfo.bestAskPrice - priceGrain;
 
             status = 'none';
-            if (!orderbookInfoPre) {
-                status = 'none';
+            if (layerStatus == '10' && layerStatusPre != '10') {
+                bestBid = ask1;
+                status = 'long';
+                shape = layerStatus;
             }
-            else {
-                let layeringBidUp = orderbookInfo.layeringBidPrice > orderbookInfoPre.layeringBidPrice;
-                let layeringAskDown = orderbookInfo.layeringAskPrice < orderbookInfoPre.layeringAskPrice;
-                let overBuy = orderbookInfo.overBuy;
-                let overSell = orderbookInfo.overSell;
-                if (layeringBidUp && layeringAskDown) {
-                    orderbookInfo.layeringBidAmount > orderbookInfo.layeringAskAmount ? layeringAskDown=false : layeringBidUp=false;
-                }
-                if (layeringBidUp && signal > 0) {
-                    status = 'long';
-                    shape = 'layer up'
-                    if (overBuy) {
-                        bestBid = bid1 + priceGrain
-                        waitTime = 500;
-                        shape = 'layer up aggressive'
-                    }
-                }
-                else if (layeringAskDown && signal < 0) {
-                    status = 'short';
-                    shape = 'layer down'
-                    if (overSell) {
-                        bestAsk = ask1 - priceGrain
-                        waitTime = 500;
-                        shape = 'layer down aggressive'
-                    }
-                }
-                else if (signal1 > 0 && overBuy && !layeringAskDown) {
-                    status = 'long';
-                    shape = 'common'
-                }
-                else if (signal1 < 0 && overSell && !layeringBidUp) {
-                    status = 'short'
-                    shape = 'common'
-                }
+            else if (layerStatus == '01' && layerStatusPre != '01') {
+                bestAsk = bid1;
+                status = 'short';
+                shape = layerStatus;
             }
+            if (position > 0 && layerStatus != '10') {
+                bestAsk = bid1;
+            }
+            else if (position < 0 && layerStatus != '01') {
+                bestBid = ask1;
+            }
+
+
+            // else {
+            //     if (tradesInfo.sumSpread > tradesInfoPre.sumSpread && orderbookInfo.imbalance > 0) {
+            //         status = 'long';
+            //         shape = 'guard';
+            //     }
+            //     else if (tradesInfo.sumSpread < tradesInfoPre.sumSpread > 0 && orderbookInfo.imbalance < 0) {
+            //         status = 'short';
+            //         shape = 'guard'; 
+            //     }
+            // }
+            logger.log("status: %s, shape: %s, bestBid: %d, beskAsk: %d", status, shape, bestBid, bestAsk);
 
             let trading = false;
 
             if (orderId) {
                 let canceled = await broker.cancelOrder(orderId);
+                if (!canceled && position != 0) {
+                    close(position > 0 ? 'long' : 'short');
+                }
                 orderId = null;
-                if (!canceled) {
-                    // 已经执行了，开始下一个买卖
-                    close(preStatus);
-                    continue;
-                }
+            }
 
-                let positionAmt = await broker.getPosition();
-                // 已经有仓位了，优先退出，并且不管是否退出，开始下个循环
-                if (positionAmt < 0) {
-                    closePrice = status == 'short' ? bestBid : bid1;
-                    if (holdNumTick > 3) {
-                        closePrice = ask1;
-                    }
-                    let order = await broker.buy(closePrice, -positionAmt, 1000, false, true);
-                    if (order.status == "open") {
-                        orderId = order.orderId;
-                    }
-                    else {
-                        close('short');
-                    }
+            let positionAmt = await broker.getPosition();
+            // 已经有仓位了，优先退出，并且不管是否退出，开始下个循环
+            if (positionAmt < 0) {
+                closePrice = bestBid;
+                if (holdNumTick > 9) {
+                    closePrice = bid1;
                 }
-                else if (positionAmt > 0) {
-                    closePrice = status == 'long' ? bestAsk : ask1;
-                    if (holdNumTick > 3) {
-                        bestAsk = bid1;
-                    }
-                    let order = await broker.sell(closePrice, positionAmt, 1000, false, true);
-                    if (order.status == "open") {
-                        orderId = order.orderId;
-                    }
-                    else {
-                        close('long');
-                    }
+                let order = await broker.buy(closePrice, -positionAmt, waitTime, false, true);
+                if (order.status == "open") {
+                    orderId = order.orderId;
+                }
+                else {
+                    close('short');
                 }
                 trading = true;
             }
-            else if (bestAsk >= bestBid * 1.0008) {
-                logger.log("status: %s, shape: %s, bestBid: %d, beskAsk: %d, signal: %d", status, shape, bestBid, bestAsk, signal);
+            else if (positionAmt > 0) {
+                closePrice = bestAsk;
+                if (holdNumTick > 9) {
+                    closePrice = ask1;
+                }
+                let order = await broker.sell(closePrice, positionAmt, waitTime, false, true);
+                if (order.status == "open") {
+                    orderId = order.orderId;
+                }
+                else {
+                    close('long');
+                }
+                trading = true;
+            }
+            else {
+                position = 0;
                 if (status == 'long') {
                     costPrice = bestBid;
-                    let order = await broker.buy(costPrice, size, waitTime, true, false);
-                    if (order.status == 'closed') {
-                        closePrice = bestAsk;
-                        order = await broker.sell(closePrice, size, 3000 - waitTime, false, true);
-                        if (order.status == "open") {
-                            orderId = order.orderId;
-                        }
-                        else {
-                            close(status);
-                        }
+                    let order = await broker.buy(costPrice, size, waitTime, false, false);
+                    if (order.status == 'open') {
+                        orderId = order.orderId;
+                    }
+                    else {
+                        position = size;
                     }
                     trading = true;
                 }
                 else if (status == "short") {
                     costPrice = bestAsk;
-                    let order = await broker.sell(costPrice, size, waitTime, true, false);
-                    if (order.status == 'closed') {
-                        closePrice = bestBid;
-                        order = await broker.buy(closePrice, size, 3000 - waitTime, false, true);
-                        if (order.status == "open") {
-                            orderId = order.orderId;
-                        }
-                        else {
-                            close(status);
-                        }
+                    let order = await broker.sell(costPrice, size, waitTime, false, false);
+                    if (order.status == 'open') {
+                        orderId = order.orderId;
+                    }
+                    else {
+                        position = -size;
                     }
                     trading = true;
                 }
