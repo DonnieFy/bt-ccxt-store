@@ -122,48 +122,166 @@ class MyBroker {
 
     let priceGrain = parseFloat(Math.pow(10, 0 - pricePresision).toPrecision(pricePresision));
 
+    let preBid1 = 0;
+    let preAsk1 = 0;
+    let bid1 = 0;
+    let ask1 = 0;
     let winTimes = 0;
     let loseTimes = 0;
+    let hasError = false;
+    let orderbook0 = null;
+    let orderbook = null;
+
+    exchange.myClose = async function () {
+        let positionAmt = await broker.getPosition();
+        if (positionAmt != 0) {
+            if (positionAmt > 0) {
+                await exchange.createMarketSellOrder(symbol, positionAmt, { "reduceOnly": true })
+            }
+            else {
+                await exchange.createMarketBuyOrder(symbol, -positionAmt, { "reduceOnly": true })
+            }
+            logger.log('win: %d, lose: %d, total: %d', winTimes, ++loseTimes, winTimes + loseTimes);
+        }
+    }
 
     while (true) {
         // 计算订单薄
         // let average = parseFloat((sum / (buyCount + sellCount)).toPrecision(pricePresision));
-        const orderbook = await exchange.fetchOrderBook(symbol, 10);
-        let bid1 = orderbook.bids[0][0]+priceGrain
-        let ask1 = orderbook.asks[0][0]-priceGrain
-
-        let trading = false;
-        if (ask1 >= bid1 * 1.001) {
-            logger.log("bid: %d, ask: %d", bid1, ask1);
-            let size = 8;
-            let promise1 = exchange.createLimitOrder(symbol, 'buy', size, bid1);
-            let promise2 = exchange.createLimitOrder(symbol, 'sell', size, ask1);
-            let orders = await Promise.all([promise1, promise2]);
-            await sleep(200);
-            let p1 = broker.cancelOrder(orders[0].id);
-            let p2 = broker.cancelOrder(orders[1].id);
-            let canceleds = await Promise.all([p1, p2]);
-            if (!canceleds[0] && !canceleds[1]) {
-                winTimes++
-                logger.log('win: %d, lose: %d, total: %d', winTimes, loseTimes, winTimes + loseTimes);
+        try {
+            if (hasError) {
+                await exchange.cancelAllOrders(symbol);
+                await exchange.myClose();
             }
-            else {
-                let positionAmt = await broker.getPosition();
-                if (positionAmt != 0) {
-                    loseTimes++;
-                    if (positionAmt > 0) {
-                        await exchange.createMarketSellOrder(symbol, positionAmt, { "reduceOnly": true })
+
+            orderbook0 = orderbook
+            orderbook = await exchange.fetchOrderBook(symbol, 10);
+            preBid1 = bid1;
+            preAsk1 = ask1;
+            bid1 = orderbook.bids[0][0]
+            ask1 = orderbook.asks[0][0]
+
+            if (!orderbook0) {
+                continue;
+            }
+
+            let bidAmount = 0;
+            let askAmount = 0;
+            
+            let imbaBid = orderbook.bids.reduce(function(mem, bid, i) {
+                bidAmount += bid[1]
+                let bidPre = orderbook0.bids[i];
+                return mem + (bid[0] >= bidPre[0] ? 1 : 0) * bid[1] - (bid[0] <= bidPre[0] ? 1 : 0) * bidPre[1];
+            }, 0);
+            let imbaAsk = orderbook.asks.reduce(function(mem, ask, i) {
+                askAmount += ask[1]
+                let askPre = orderbook0.asks[i];
+                return mem + (ask[0] <= askPre[0] ? 1 : 0) * ask[1] - (ask[0] >= askPre[0] ? 1 : 0) * askPre[1]
+            }, 0);
+            let imbalance = imbaBid - imbaAsk;
+            let bidPrice = bid1;
+            let askPrice = ask1;
+
+            let trading = false;
+            if (askPrice >= bidPrice * 1.0008) {
+                logger.log("bid: %d, ask: %d, bid price: %d, ask price: %d, imba: %d", bid1, ask1, bidPrice, askPrice, imbalance);
+                logger.log("bidAmount: %d, askAmount: %d", bidAmount, askAmount);
+                let size = 8;
+
+                // let promise1 = exchange.createLimitOrder(symbol, 'buy', size, bidPrice);
+                // let promise2 = exchange.createLimitOrder(symbol, 'sell', size, askPrice);
+                // let orders = await Promise.all([promise1, promise2]);
+
+                // let time = 0
+                // let closed = false;
+                // while (time < 1000) {
+                //     let openOrders = await exchange.fetchOpenOrders(symbol);
+                //     if (openOrders.length == 0) {
+                //         closed = true;
+                //         break;
+                //     }
+                //     await sleep(200);
+                //     time+=200;
+                // }
+                // if (closed) {
+                //     logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
+                // }
+                // else {
+                //     let p1 = broker.cancelOrder(orders[0].id);
+                //     let p2 = broker.cancelOrder(orders[1].id);
+                //     let canceleds = await Promise.all([p1, p2]);
+                //     if (!canceleds[0] && !canceleds[1]) {
+                //         logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
+                //     }
+                //     else {
+                //         await exchange.myClose();
+                //     }
+                // }
+                let status = 'none'
+                if (imbalance > askAmount && bidAmount > askAmount) {
+                    status = 'long';
+                    bidPrice += Math.round(imbalance/askAmount) * priceGrain;
+                }
+                else if (-imbalance > bidAmount && askAmount > bidAmount) {
+                    status = 'short';
+                    askPrice += Math.round(imbalance/bidAmount) * priceGrain;
+                }
+                else if (bidAmount - Math.abs(imbalance) > askAmount) {
+                    status = 'long';
+                }
+                else if (askAmount - Math.abs(imbalance) > bidAmount) {
+                    status = 'short';
+                }
+
+                if (imbalance < 0) {
+                    let order = await exchange.createLimitOrder(symbol, 'sell', size, askPrice);
+                    await sleep(200);
+                    let canceled = await broker.cancelOrder(order.id);
+                    if (!canceled) {
+                        order = await exchange.createLimitOrder(symbol, 'buy', size, bidPrice);
+                        await sleep(500);
+                        canceled = await broker.cancelOrder(order.id);
+                        if (!canceled) {
+                            logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
+                        }
+                        else {
+                            await exchange.myClose();
+                        }
                     }
                     else {
-                        await exchange.createMarketBuyOrder(symbol, -positionAmt, { "reduceOnly": true })
+                        await exchange.myClose();
                     }
-                    logger.log('win: %d, lose: %d, total: %d', winTimes, loseTimes, winTimes + loseTimes);
                 }
+                else {
+                    let order = await exchange.createLimitOrder(symbol, 'buy', size, bidPrice);
+                    await sleep(200);
+                    let canceled = await broker.cancelOrder(order.id);
+                    if (!canceled) {
+                        order = await exchange.createLimitOrder(symbol, 'sell', size, askPrice);
+                        await sleep(500);
+                        canceled = await broker.cancelOrder(order.id);
+                        if (!canceled) {
+                            logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
+                        }
+                        else {
+                            await exchange.myClose();
+                        }
+                    }
+                    else {
+                        await exchange.myClose();
+                    }
+                }
+
+                trading = true;
             }
-            trading = true;
+            if (!trading) {
+                await sleep(100);
+            }
+            hasError = false;
         }
-        if (!trading) {
-            await sleep(100);
+        catch (e) {
+            logger.log("error: %s", e);
+            hasError = true
         }
     }
 
