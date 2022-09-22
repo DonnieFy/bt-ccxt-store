@@ -160,12 +160,13 @@ class MyBroker {
     let amount = 0;
     let winTimes = 0;
     let loseTimes = 0;
-    let size = 10;
+    let size = 8;
     let preStatus = "";
 
     let bidPrices = [];
     let askPrices = [];
     let numTick = 0;
+    let holdNumTick = 0;
 
     function close(status) {
         if (status == "long") {
@@ -181,47 +182,50 @@ class MyBroker {
         try {
             var time = exchange.milliseconds();
             if (!orderId) {
-                if (time > preTime + 4 * 1000) {
+                if (time > preTime + 6 * 1000) {
                     preTime = time;
-                    var trades = await exchange.fetchTrades(symbol, time - 4 * 1000, 1000);
+                    var trades = await exchange.fetchTrades(symbol, time - 6 * 1000, 300);
                     amount = trades.reduce(function (mem, trade) {
                         return mem + trade.amount;
                     }, 0)
                 }
+                holdNumTick = 0;
             }
             else {
-                amount = amount * 0.8
+                holdNumTick++;
             }
             // 计算订单薄
             const orderbook = await exchange.fetchOrderBook(symbol, 50);
-            let bestBid = getBestBidPrice(orderbook.bids, amount) + priceGrain;
-            let bestAsk = getBestAskPrice(orderbook.asks, amount) - priceGrain;
+            let calcAmount = amount * 0.5 * Math.pow(0.8, holdNumTick);
+            let bestBid = getBestBidPrice(orderbook.bids, calcAmount) + priceGrain;
+            let bestAsk = getBestAskPrice(orderbook.asks, calcAmount) - priceGrain;
             let bid1 = orderbook.bids[0][0]
             let ask1 = orderbook.asks[0][0]
             bestBid = bestBid > ask1 ? ask1 : bestBid;
             bestAsk = bestAsk < bid1 ? bid1 : bestAsk;
 
-            let waitTime = 500;
+            let waitTime = 1000;
             let shape = ''
 
             if (bidPrices.length > 6) {
                 bidPrices = bidPrices.slice(-6);
                 askPrices = askPrices.slice(-6);
-                maxBid = Math.max(...bidPrices);
-                minAsk = Math.min(...askPrices);
-                if (bid1 > maxBid * 1.0008) {
+                let maxBid = Math.max(...bidPrices);
+                let minAsk = Math.min(...askPrices);
+                if (bid1 > maxBid * 1.0004) {
                     status = 'long'
                     numTick = 0;
                 }
-                else if (ask1 < minAsk *0.9992) {
+                else if (ask1 < minAsk *0.9996) {
                     status = 'short';
                     numTick = 0;
                 }
             }
-            if (numTick > 6) {
+            if (numTick > 6 && status != 'none') {
                 status = 'none';
                 numTick = 0;
             }
+            logger.log("status: %s, bestBid: %d, beskAsk: %d, bid1: %d, ask1: %d", status, bestBid, bestAsk, bid1, ask1);
             bidPrices.push(bid1);
             askPrices.push(ask1);
 
@@ -239,7 +243,10 @@ class MyBroker {
                 let positionAmt = await broker.getPosition();
                 // 已经有仓位了，优先退出，并且不管是否退出，开始下个循环
                 if (positionAmt < 0) {
-                    closePrice = status == "short" ? bestBid : ask1;
+                    closePrice = bestBid;
+                    if (holdNumTick > 5) {
+                        closePrice = ask1 + 5 * priceGrain;
+                    }
                     let order = await broker.buy(closePrice, -positionAmt, 1000, false, true);
                     if (order.status == "open") {
                         orderId = order.orderId;
@@ -249,7 +256,10 @@ class MyBroker {
                     }
                 }
                 else if (positionAmt > 0) {
-                    closePrice = status == "long" ? bestAsk : bid1;
+                    closePrice = bestAsk;
+                    if (holdNumTick > 5) {
+                        closePrice = bid1 - 5 * priceGrain;
+                    }
                     let order = await broker.sell(closePrice, positionAmt, 1000, false, true);
                     if (order.status == "open") {
                         orderId = order.orderId;
@@ -261,13 +271,12 @@ class MyBroker {
                 trading = true;
             }
             else if (bestAsk >= bestBid * 1.0008) {
-                logger.log("status: %s, shape: %s, bestBid: %d, beskAsk: %d, signal: %d", status, shape, bestBid, bestAsk, signal);
                 if (status == 'long') {
                     costPrice = bestBid;
-                    let order = await broker.buy(costPrice, size, waitTime, true, false);
+                    let order = await broker.buy(costPrice, size, 1000, true, false);
                     if (order.status == 'closed') {
                         closePrice = bestAsk;
-                        order = await broker.sell(closePrice, size, 3000 - waitTime, false, true);
+                        order = await broker.sell(closePrice, size, 1000, false, true);
                         if (order.status == "open") {
                             orderId = order.orderId;
                         }
@@ -279,10 +288,10 @@ class MyBroker {
                 }
                 else if (status == "short") {
                     costPrice = bestAsk;
-                    let order = await broker.sell(costPrice, size, waitTime, true, false);
+                    let order = await broker.sell(costPrice, size, 1000, true, false);
                     if (order.status == 'closed') {
                         closePrice = bestBid;
-                        order = await broker.buy(closePrice, size, 3000 - waitTime, false, true);
+                        order = await broker.buy(closePrice, size, 1000, false, true);
                         if (order.status == "open") {
                             orderId = order.orderId;
                         }
@@ -292,9 +301,7 @@ class MyBroker {
                     }
                     trading = true;
                 }
-                preStatus1 = preStatus;
                 preStatus = status;
-                preShape = shape;
             }
             if (!trading) {
                 await sleep(100);
