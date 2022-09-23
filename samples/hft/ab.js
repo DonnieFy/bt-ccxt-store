@@ -144,6 +144,8 @@ class MyBroker {
             logger.log('win: %d, lose: %d, total: %d', winTimes, ++loseTimes, winTimes + loseTimes);
         }
     }
+    let preTime = 0;
+    let waitTime = 0;
 
     while (true) {
         // 计算订单薄
@@ -153,6 +155,12 @@ class MyBroker {
                 await exchange.cancelAllOrders(symbol);
                 await exchange.myClose();
             }
+            let time = exchange.milliseconds();
+            let trades = await exchange.fetchTrades(symbol, time - 10000, 100)
+            waitTime = 50000 / trades.length;
+            if (waitTime > 2000) {
+                waitTime = 2000;
+            }
 
             orderbook0 = orderbook
             orderbook = await exchange.fetchOrderBook(symbol, 10);
@@ -160,6 +168,7 @@ class MyBroker {
             preAsk1 = ask1;
             bid1 = orderbook.bids[0][0]
             ask1 = orderbook.asks[0][0]
+            logger.log("bid1: %s, ask1: %d, waitTime: %d", bid1, ask1, waitTime);
 
             if (!orderbook0) {
                 continue;
@@ -179,100 +188,62 @@ class MyBroker {
                 return mem + (ask[0] <= askPre[0] ? 1 : 0) * ask[1] - (ask[0] >= askPre[0] ? 1 : 0) * askPre[1]
             }, 0);
             let imbalance = imbaBid - imbaAsk;
-            let bidPrice = bid1;
-            let askPrice = ask1;
+            let dif = imbalance > 0 ? Math.round(imbalance/askAmount) : Math.round(imbalance/bidAmount);
+            let bidPrice = bid1 + dif * priceGrain;
+            let askPrice = ask1 + dif * priceGrain;
 
             let trading = false;
             if (askPrice >= bidPrice * 1.0008) {
-                logger.log("bid: %d, ask: %d, bid price: %d, ask price: %d, imba: %d", bid1, ask1, bidPrice, askPrice, imbalance);
+                logger.log("symbol: %s, bid: %d, ask: %d, bid price: %d, ask price: %d, imba: %d", symbol, bid1, ask1, bidPrice, askPrice, imbalance);
                 logger.log("bidAmount: %d, askAmount: %d", bidAmount, askAmount);
-                let size = 8;
+                let size = 7;
 
-                // let promise1 = exchange.createLimitOrder(symbol, 'buy', size, bidPrice);
-                // let promise2 = exchange.createLimitOrder(symbol, 'sell', size, askPrice);
-                // let orders = await Promise.all([promise1, promise2]);
+                let promise1 = exchange.createLimitOrder(symbol, 'buy', size, bidPrice);
+                let promise2 = exchange.createLimitOrder(symbol, 'sell', size, askPrice);
+                let orders = await Promise.all([promise1, promise2]);
 
-                // let time = 0
-                // let closed = false;
-                // while (time < 1000) {
-                //     let openOrders = await exchange.fetchOpenOrders(symbol);
-                //     if (openOrders.length == 0) {
-                //         closed = true;
-                //         break;
-                //     }
-                //     await sleep(200);
-                //     time+=200;
-                // }
-                // if (closed) {
-                //     logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
-                // }
-                // else {
-                //     let p1 = broker.cancelOrder(orders[0].id);
-                //     let p2 = broker.cancelOrder(orders[1].id);
-                //     let canceleds = await Promise.all([p1, p2]);
-                //     if (!canceleds[0] && !canceleds[1]) {
-                //         logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
-                //     }
-                //     else {
-                //         await exchange.myClose();
-                //     }
-                // }
-                let status = 'none'
-                if (imbalance > askAmount && bidAmount > askAmount) {
-                    status = 'long';
-                    bidPrice += Math.round(imbalance/askAmount) * priceGrain;
-                }
-                else if (-imbalance > bidAmount && askAmount > bidAmount) {
-                    status = 'short';
-                    askPrice += Math.round(imbalance/bidAmount) * priceGrain;
-                }
-                else if (bidAmount - Math.abs(imbalance) > askAmount) {
-                    status = 'long';
-                }
-                else if (askAmount - Math.abs(imbalance) > bidAmount) {
-                    status = 'short';
-                }
-
-                if (imbalance < 0) {
-                    let order = await exchange.createLimitOrder(symbol, 'sell', size, askPrice);
+                let time = 0
+                let closed = false;
+                
+                while (time < waitTime) {
+                    let openOrders = await exchange.fetchOpenOrders(symbol);
+                    if (openOrders.length == 0) {
+                        closed = true;
+                        break;
+                    }
                     await sleep(200);
-                    let canceled = await broker.cancelOrder(order.id);
-                    if (!canceled) {
-                        order = await exchange.createLimitOrder(symbol, 'buy', size, bidPrice);
-                        await sleep(500);
-                        canceled = await broker.cancelOrder(order.id);
-                        if (!canceled) {
-                            logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
-                        }
-                        else {
-                            await exchange.myClose();
-                        }
-                    }
-                    else {
-                        await exchange.myClose();
-                    }
+                    time+=200;
+                }
+                if (closed) {
+                    logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
                 }
                 else {
-                    let order = await exchange.createLimitOrder(symbol, 'buy', size, bidPrice);
-                    await sleep(200);
-                    let canceled = await broker.cancelOrder(order.id);
-                    if (!canceled) {
-                        order = await exchange.createLimitOrder(symbol, 'sell', size, askPrice);
-                        await sleep(500);
-                        canceled = await broker.cancelOrder(order.id);
-                        if (!canceled) {
-                            logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
-                        }
-                        else {
-                            await exchange.myClose();
-                        }
+                    let p1 = broker.cancelOrder(orders[0].id);
+                    let p2 = broker.cancelOrder(orders[1].id);
+                    let canceleds = await Promise.all([p1, p2]);
+                    if (!canceleds[0] && !canceleds[1]) {
+                        logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
                     }
                     else {
                         await exchange.myClose();
                     }
                 }
-
-                trading = true;
+                // let status = 'none'
+                // if (imbalance > askAmount && bidAmount > askAmount) {
+                //     status = 'long';
+                //     bidPrice += Math.round(imbalance/askAmount) * priceGrain;
+                // }
+                // else if (-imbalance > bidAmount && askAmount > bidAmount) {
+                //     status = 'short';
+                //     askPrice += Math.round(imbalance/bidAmount) * priceGrain;
+                // }
+                // else if (bidAmount - Math.abs(imbalance) > askAmount) {
+                //     status = 'long';
+                // }
+                // else if (askAmount - Math.abs(imbalance) > bidAmount) {
+                //     status = 'short';
+                // }
+                // trading = true;
             }
             if (!trading) {
                 await sleep(100);

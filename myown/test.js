@@ -18,13 +18,13 @@ const socks = require('@luminati-io/socksv5')
     const exchange = new ccxt.binance({
         'apiKey': 'NHOkdZV92IY0sIcvdfswkc60SCyJAKTnrbgkHILGDHQW6NXGo87NwzQmBXXFGJSo',
         'secret': 'W9ffpThUt5TLVqOJG2tNZeFyAhiDJqyUK3lX3IgRqBTEpcG2SuHRJFLQyvyCTpK0',
-        'agent': agent,
+        'agent': httpsAgent,
         'options': {
             'defaultType': 'future'
         }
     });
 
-    var symbol = "PHB/BUSD";
+    var symbol = "LUNA2/BUSD";
 
     let markets = await exchange.loadMarkets();
     let market = markets[symbol];
@@ -57,12 +57,12 @@ const socks = require('@luminati-io/socksv5')
     // // let info = postions[0];
     // // let postionSize = parseFloat(info.positionAmt);
 
-    // // console.log(JSON.stringify(info));
-    // var time = exchange.milliseconds();
-    // var trades = await exchange.fetchTrades(symbol, time-1000, 100)
-    //  for (let i = 0, len = trades.length; i < len; i++) {
-    //     console.log("time: %s, amount: %d, price: %d",trades[i].datetime, trades[i].amount, trades[i].price);
-    // }
+    // console.log(JSON.stringify(info));
+    var time = exchange.milliseconds();
+    var trades = await exchange.fetchTrades(symbol, time-1000, 10)
+     for (let i = 0, len = trades.length; i < len; i++) {
+        console.log("time: %s, amount: %d, price: %d",trades[i].datetime, trades[i].amount, trades[i].price);
+    }
     // console.log(trades.length);
     // const orderbook = await exchange.fetchOrderBook(symbol)
     // console.log(orderbook.asks.length);
@@ -76,12 +76,12 @@ const socks = require('@luminati-io/socksv5')
     //     let ask = orderbook.asks[i];
     //     console.log("ask: %d, amount: %d", ask[0], ask[1]);
     // }
-    var time = exchange.milliseconds();
-    var trades = await exchange.fetchTrades(symbol, time - 3000, 1000)
-    console.log(new Date(time - 3000))
-    for (let i = 0, len = trades.length; i < len; i++) {
-        console.log("time: %s, amount: %d, price: %d",trades[i].datetime, trades[i].amount, trades[i].price);
-    }
+    // var time = exchange.milliseconds();
+    // var trades = await exchange.fetchTrades(symbol, time - 3000, 1000)
+    // console.log(new Date(time - 3000))
+    // for (let i = 0, len = trades.length; i < len; i++) {
+    //     console.log("time: %s, amount: %d, price: %d",trades[i].datetime, trades[i].amount, trades[i].price);
+    // }
     // trades = trades.reverse()
     // var buyCount = 0;
     // var sellCount = 0;

@@ -258,10 +258,10 @@ class MyTrader {
 
     logProfit() {
         let keys = new Set();
-        Object.keys(this.winTimes).forEach(function(value) {
+        Object.keys(this.winTimes).forEach(function (value) {
             keys.add(value)
         });
-        Object.keys(this.loseTimes).forEach(function(value) {
+        Object.keys(this.loseTimes).forEach(function (value) {
             keys.add(value)
         });
         let arr = Array.from(keys);
@@ -305,7 +305,7 @@ class MyTrader {
 
     let markets = await exchange.loadMarkets();
     let market = markets[symbol];
-    let pricePresision = parseInt(market.precision.price) + 1;
+    let pricePresision = parseInt(market.precision.price);
 
     let broker = new MyBroker(exchange, symbol);
     let trader = new MyTrader();
@@ -316,15 +316,13 @@ class MyTrader {
     let costPrice = 0;
     let closePrice = 0;
     let preTime = 0;
+    let orderbook = null;
+    let orderbook0 = null;
 
     while (true) {
         if (!orderId) {
             var time = exchange.milliseconds();
-            if (time > preTime + 20 * 1000) {
-                trader.logProfit();
-                preTime = time;
-            }
-            var trades = await exchange.fetchTrades(symbol, time - 10 * 1000, 1000);
+            var trades = await exchange.fetchTrades(symbol, time - 10 * 1000, 100);
             trader.addTrades(trades);
         }
         else {
@@ -341,24 +339,42 @@ class MyTrader {
 
         // 计算订单薄
         // let average = parseFloat((sum / (buyCount + sellCount)).toPrecision(pricePresision));
-        const orderbook = await exchange.fetchOrderBook(symbol, 50);
+        orderbook0 = orderbook;
+        orderbook = await exchange.fetchOrderBook(symbol, 50);
+        if (!orderbook0) {
+            continue;
+        }
         let bestBid = getBestBidPrice(orderbook.bids, amount / 10);
         let bestAsk = getBestAskPrice(orderbook.asks, amount / 10);
         let bid1 = orderbook.bids[0][0]
         let ask1 = orderbook.asks[0][0]
 
-        let bidPrice = bestBid * 0.8 + bestAsk * 0.2 + priceGrain
-        let askPrice = bestBid * 0.2 + bestAsk * 0.8 - priceGrain
+        let bidAmount = 0;
+        let askAmount = 0;
+        let imbaBid = orderbook.bids.reduce(function(mem, bid, i) {
+            bidAmount += bid[1]
+            let bidPre = orderbook0.bids[i];
+            return mem + (bid[0] >= bidPre[0] ? 1 : 0) * bid[1] - (bid[0] <= bidPre[0] ? 1 : 0) * bidPre[1];
+        }, 0);
+        let imbaAsk = orderbook.asks.reduce(function(mem, ask, i) {
+            askAmount += ask[1]
+            let askPre = orderbook0.asks[i];
+            return mem + (ask[0] <= askPre[0] ? 1 : 0) * ask[1] - (ask[0] >= askPre[0] ? 1 : 0) * askPre[1]
+        }, 0);
+        let imbalance = imbaBid - imbaAsk;
+        let dif = imbalance > 0 ? Math.round(imbalance/askAmount) : Math.round(imbalance/bidAmount);
+
+        let bidPrice = bestBid + dif * priceGrain
+        let askPrice = bestAsk + dif * priceGrain
         logger.log("status: %s, bidPrice: %d, askPrice: %d, amount: %d", status, bidPrice, askPrice, amount);
 
-        
         // 执行订单
         // 已经有仓位了，优先退出，并且不管是否退出，开始下个循环
         let positionAmt = await broker.getPosition();
         let trading = false;
         if (positionAmt > 0) {
             let price = status == 'up' ? askPrice : ask1;
-            let order = await broker.sell(price, positionAmt, 200, false);
+            let order = await broker.sell(price, positionAmt, 500, false);
             if (order.status == "open") {
                 orderId = order.orderId;
                 closePrice = price;
@@ -370,12 +386,12 @@ class MyTrader {
             }
             trading = true;
         }
-        else {
-            let size = 0.03;
+        else if (askPrice > bidPrice * 1.001) {
+            let size = 0.01;
             if (status == "up") {
-                let order = await broker.buy(bidPrice, size, 200, true);
+                let order = await broker.buy(bidPrice, size, 500, true);
                 if (order.status == 'closed') {
-                    order = await broker.sell(askPrice, size, 200, false);
+                    order = await broker.sell(askPrice, size, 1500, false);
                     if (order.status == "open") {
                         costPrice = bidPrice;
                         closePrice = askPrice;
