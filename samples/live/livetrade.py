@@ -61,7 +61,7 @@ class MyData:
     def fetch_data(self, since=None):
         if since is None:
             fromdate = datetime.utcnow() - timedelta(minutes=60)
-            since = self._last_ts if self._last_ts > 0 else int(
+            since = self._last_ts - 60 * 1000 if self._last_ts > 0 else int(
                 (fromdate - datetime(1970, 1, 1)).total_seconds() * 1000)
         if self.debug:
             self.logger.log('Fetching: {}, TF: {}, Since: {}, Limit: {}'.format(self.symbol, '1m', since, 1000))

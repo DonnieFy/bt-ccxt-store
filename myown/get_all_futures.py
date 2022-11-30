@@ -1,6 +1,7 @@
 import ccxt
 import json
 from pprint import pprint
+from datetime import datetime, timedelta
 
 
 def table(values):
@@ -32,22 +33,25 @@ exchange = ccxt.binance({
     },
 })
 
-markets = exchange.load_markets()
+# markets = exchange.load_markets()
+#
+# print(markets['APTUSDT']['active'])
+#
+# market = markets['1000LUNC/BUSD']
+# print('min amount: {}, precision amount: {}, min price: {}, precision price: {}'.format(market['limits']['amount']['min'], market['precision']['amount'], market['limits']['price']['min'], market['precision']['price']))
+# market = markets['FOOTBALL/USDT']
+# print('min amount: {}, precision amount: {}, min price: {}, precision price: {}'.format(market['limits']['amount']['min'], market['precision']['amount'], market['limits']['price']['min'], market['precision']['price']))
+# market = markets['BTC/USDT']
+# print('min amount: {}, precision amount: {}, min price: {}, precision price: {}'.format(market['limits']['amount']['min'], market['precision']['amount'], market['limits']['price']['min'], market['precision']['price']))
+#
+# symbol = 'BTC/USDT'  # YOUR SYMBOL HERE
+# market = exchange.market(symbol)
+# trades = exchange.fetch_my_trades(symbol)
+# print(trades)
 
-market = markets['1000LUNC/BUSD']
-print('min amount: {}, precision amount: {}, min price: {}, precision price: {}'.format(market['limits']['amount']['min'], market['precision']['amount'], market['limits']['price']['min'], market['precision']['price']))
-market = markets['FOOTBALL/USDT']
-print('min amount: {}, precision amount: {}, min price: {}, precision price: {}'.format(market['limits']['amount']['min'], market['precision']['amount'], market['limits']['price']['min'], market['precision']['price']))
-market = markets['BTC/USDT']
-print('min amount: {}, precision amount: {}, min price: {}, precision price: {}'.format(market['limits']['amount']['min'], market['precision']['amount'], market['limits']['price']['min'], market['precision']['price']))
-
-symbol = 'BTC/USDT'  # YOUR SYMBOL HERE
-market = exchange.market(symbol)
-trades = exchange.fetch_my_trades(symbol)
-print(trades)
-
-data = exchange.fetch_ohlcv('BTCSTUSDT', timeframe='1m', limit=50)
-# print(data)
+since = (datetime.utcnow() - timedelta(minutes=2) - datetime(1970, 1, 1)).total_seconds() * 1000
+data = exchange.fetch_ohlcv('BTC/USDT', timeframe='1m', since=since, limit=50)
+print(data)
 
 #
 # exchange.verbose = True  # UNCOMMENT THIS AFTER LOADING THE MARKETS FOR DEBUGGING

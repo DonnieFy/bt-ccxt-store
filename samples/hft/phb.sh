@@ -1,0 +1,1 @@
+nohup node jump_phb.js >/dev/null 2>&1 &

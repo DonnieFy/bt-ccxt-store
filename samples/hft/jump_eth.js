@@ -21,13 +21,13 @@ class MyLogger {
     log() {
         let date = new Date();
         date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
-        let log = '[' + date.toISOString() + '] ' + util.format.apply(null, arguments);
+        let log = util.format.apply(null, arguments);
         this.log_file.write(log + '\n');
         console.log(log);
     }
 }
 
-let logger = new MyLogger('quant.log');
+let logger = new MyLogger('quant_eth.log');
 
 class MyBroker {
 
@@ -57,7 +57,6 @@ class MyBroker {
             order = await exchange.fetchOrder(orderId, symbol);
             if (order.status == "closed") {
                 logger.log("closed: %s", orderId);
-
                 break;
             }
             time += 150;
@@ -112,7 +111,7 @@ class MyBroker {
         // "agent": httpsAgent
     });
 
-    var symbol = "ETH/BUSD";
+    var symbol = "1000LUNC/BUSD";
 
     let markets = await exchange.loadMarkets();
     let market = markets[symbol];
@@ -122,15 +121,9 @@ class MyBroker {
 
     let priceGrain = parseFloat(Math.pow(10, 0 - pricePresision).toPrecision(pricePresision));
 
-    let preBid1 = 0;
-    let preAsk1 = 0;
-    let bid1 = 0;
-    let ask1 = 0;
     let winTimes = 0;
     let loseTimes = 0;
     let hasError = false;
-    let orderbook0 = null;
-    let orderbook = null;
 
     exchange.myClose = async function () {
         let positionAmt = await broker.getPosition();
@@ -143,116 +136,117 @@ class MyBroker {
             }
             logger.log('win: %d, lose: %d, total: %d', winTimes, ++loseTimes, winTimes + loseTimes);
         }
+        else {
+            logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
+        }
     }
-    let preTime = 0;
-    let waitTime = 0;
+
+    exchange.forceCancelAllOrders = async function() {
+        try {
+            await exchange.cancelAllOrders()
+        }
+        catch(e) {
+
+        }
+    }
+
+    let period = 8 * 1000;
+    let orderbook = null;
+    let orderbookPre = null;
+    let num = 0;
+    let startPrice = 0;
+    let endPrice = 0;
+    let bidPrices = [];
+    let askPrices = [];
+
+    logger.log('num, bid1, ask1, position')
 
     while (true) {
         // 计算订单薄
         // let average = parseFloat((sum / (buyCount + sellCount)).toPrecision(pricePresision));
         try {
             if (hasError) {
-                await exchange.cancelAllOrders(symbol);
+                await exchange.forceCancelAllOrders(symbol);
                 await exchange.myClose();
             }
+            hasError = false;
+
             let time = exchange.milliseconds();
-            let trades = await exchange.fetchTrades(symbol, time - 10000, 100)
-            waitTime = 50000 / trades.length;
-            if (waitTime > 2000) {
-                waitTime = 2000;
-            }
-
-            orderbook0 = orderbook
+            orderbookPre = orderbook;
             orderbook = await exchange.fetchOrderBook(symbol, 10);
-            preBid1 = bid1;
-            preAsk1 = ask1;
-            bid1 = orderbook.bids[0][0]
-            ask1 = orderbook.asks[0][0]
-            logger.log("bid1: %s, ask1: %d, waitTime: %d", bid1, ask1, waitTime);
 
-            if (!orderbook0) {
+            if (!orderbookPre) {
+                await sleep(100);
                 continue;
             }
 
-            let bidAmount = 0;
-            let askAmount = 0;
-            
-            let imbaBid = orderbook.bids.reduce(function(mem, bid, i) {
-                bidAmount += bid[1]
-                let bidPre = orderbook0.bids[i];
-                return mem + (bid[0] >= bidPre[0] ? 1 : 0) * bid[1] - (bid[0] <= bidPre[0] ? 1 : 0) * bidPre[1];
-            }, 0);
-            let imbaAsk = orderbook.asks.reduce(function(mem, ask, i) {
-                askAmount += ask[1]
-                let askPre = orderbook0.asks[i];
-                return mem + (ask[0] <= askPre[0] ? 1 : 0) * ask[1] - (ask[0] >= askPre[0] ? 1 : 0) * askPre[1]
-            }, 0);
-            let imbalance = imbaBid - imbaAsk;
-            let dif = imbalance > 0 ? Math.round(imbalance/askAmount) : Math.round(imbalance/bidAmount);
-            let bidPrice = bid1 + dif * priceGrain;
-            let askPrice = ask1 + dif * priceGrain;
+            let bid1 = orderbook.bids[0][0];
+            let ask1 = orderbook.asks[0][0];
 
-            let trading = false;
-            if (askPrice >= bidPrice * 1.0008) {
-                logger.log("symbol: %s, bid: %d, ask: %d, bid price: %d, ask price: %d, imba: %d", symbol, bid1, ask1, bidPrice, askPrice, imbalance);
-                logger.log("bidAmount: %d, askAmount: %d", bidAmount, askAmount);
-                let size = 0.005;
+            let preBid1 = orderbookPre.bids[0][0];
+            let preAsk1 = orderbookPre.asks[0][0];
 
-                let promise1 = exchange.createLimitOrder(symbol, 'buy', size, bidPrice);
-                let promise2 = exchange.createLimitOrder(symbol, 'sell', size, askPrice);
-                let orders = await Promise.all([promise1, promise2]);
+            bidPrices.push(preBid1);
+            askPrices.push(preAsk1);
+            if (bidPrices.length > 7) {
+                bidPrices = bidPrices.slice(-7);
+                askPrices = askPrices.slice(-7);
+            }
 
-                let time = 0
-                let closed = false;
-                
-                while (time < waitTime) {
-                    let openOrders = await exchange.fetchOpenOrders(symbol);
-                    if (openOrders.length == 0) {
-                        closed = true;
-                        break;
-                    }
-                    await sleep(200);
-                    time+=200;
-                }
-                if (closed) {
+            let side0 = '';
+            let side1 = '';
+
+            let bid1Jump = bid1 - preAsk1;
+            if (bid1 > Math.max(...bidPrices) && bid1 > preAsk1) {
+                startPrice = bid1 - priceGrain;
+                endPrice = ask1 + bid1Jump;
+                side0 = 'buy';
+                side1 = 'sell';
+            }
+            let askJump = ask1 - preBid1;
+            if (ask1 < Math.min(...askPrices) && ask1 < preBid1) {
+                startPrice = ask1 + priceGrain;
+                endPrice = bid1 + askJump;
+                side0 = 'sell';
+                side1 = 'buy';
+            }
+
+            logger.log('%d, %d, %d, %s', num++, bid1, ask1, side0);
+
+            if (side0 == '') {
+                await sleep(200);
+                continue;
+            }
+
+            let size = 20;
+            let order = await broker.submit(startPrice, size, side0, 500, true, false);
+            if (order.status != 'closed') {
+                // 避免订单执行一半取消了
+                let positionAmt = await broker.getPosition();
+                size = Math.abs(positionAmt)
+            }
+            if (size > 0) {
+                order = await broker.submit(endPrice, size, side1, 800, false, true);
+                if (order.status == 'closed') {
                     logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
                 }
                 else {
-                    let p1 = broker.cancelOrder(orders[0].id);
-                    let p2 = broker.cancelOrder(orders[1].id);
-                    let canceleds = await Promise.all([p1, p2]);
-                    if (!canceleds[0] && !canceleds[1]) {
-                        logger.log('win: %d, lose: %d, total: %d', ++winTimes, loseTimes, winTimes + loseTimes);
+                    while (exchange.milliseconds() - time < period) {
+                        await sleep(100);
+                        let order0 = await exchange.fetchOrder(order.orderId, symbol);
+                        if (order0.status == 'closed') {
+                            break;
+                        }
                     }
-                    else {
-                        await exchange.myClose();
-                    }
+                    await exchange.forceCancelAllOrders(symbol);
+                    await exchange.myClose();
                 }
-                // let status = 'none'
-                // if (imbalance > askAmount && bidAmount > askAmount) {
-                //     status = 'long';
-                //     bidPrice += Math.round(imbalance/askAmount) * priceGrain;
-                // }
-                // else if (-imbalance > bidAmount && askAmount > bidAmount) {
-                //     status = 'short';
-                //     askPrice += Math.round(imbalance/bidAmount) * priceGrain;
-                // }
-                // else if (bidAmount - Math.abs(imbalance) > askAmount) {
-                //     status = 'long';
-                // }
-                // else if (askAmount - Math.abs(imbalance) > bidAmount) {
-                //     status = 'short';
-                // }
-                // trading = true;
             }
-            if (!trading) {
-                await sleep(100);
-            }
-            hasError = false;
+            orderbook = null;
         }
         catch (e) {
             logger.log("error: %s", e);
-            hasError = true
+            hasError = true;
         }
     }
 

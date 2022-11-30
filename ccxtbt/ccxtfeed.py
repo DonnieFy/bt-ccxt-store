@@ -23,6 +23,7 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 import time
+import csv
 from collections import deque
 from datetime import datetime
 
@@ -78,6 +79,11 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
 
     # States for the Finite State Machine in _load
     _ST_LIVE, _ST_HISTORBACK, _ST_OVER = range(3)
+
+    _interval = {
+        '1m': 60 * 1000,
+        '15m': 15 * 60 * 1000
+    }
 
     # def __init__(self, exchange, symbol, ohlcv_limit=None, config={}, retries=5):
     def __init__(self, **kwargs):
@@ -146,8 +152,38 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
 
         limit = self.p.ohlcv_limit
 
+        interval = self._interval[granularity]
+
+        data_from_ccxt = False
+
+        symbol = self.p.dataname.replace('/', '')
+        if granularity != '1m':
+            symbol += '_' + granularity
+
+        data = []
+        try:
+            with open('../data/' + symbol + '.csv', 'r', newline='') as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    ohlcv = [int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])]
+                    tstamp = ohlcv[0]
+
+                    if end_date is not None and tstamp > end_date:
+                        break
+                    if since is not None and tstamp < since:
+                        continue
+
+                    data.append(ohlcv)
+        except Exception as e:
+            data
+
         while True:
             dlen = len(self._data)
+
+            if data_from_ccxt or len(data) == 0:
+                data = sorted(self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity,
+                                                     since=since, limit=limit, params=self.p.fetch_ohlcv_params))
+                data_from_ccxt = True
 
             if self.p.debug:
                 # TESTING
@@ -155,8 +191,6 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
                 print('---- NEW REQUEST ----')
                 print('{} - Requesting: Since TS {} Since date {} granularity {}, limit {}, params'.format(
                     datetime.utcnow(), since, since_dt, granularity, limit, self.p.fetch_ohlcv_params))
-                data = sorted(self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity,
-                                                     since=since, limit=limit, params=self.p.fetch_ohlcv_params))
                 try:
                     for i, ohlcv in enumerate(data):
                         tstamp, open_, high, low, close, volume = ohlcv
@@ -167,36 +201,56 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
                 except IndexError:
                     print('Index Error: Data = {}'.format(data))
                 print('---- REQUEST END ----')
-            else:
-
-                data = sorted(self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity,
-                                                     since=since, limit=limit, params=self.p.fetch_ohlcv_params))
 
             # Check to see if dropping the latest candle will help with
             # exchanges which return partial data
             if self.p.drop_newest:
                 del data[-1]
 
-            for ohlcv in data:
+            if self._last_ts == 0:
+                data0 = data[0]
+                while since < data0[0]:
+                    if end_date is not None and since > end_date:
+                        break
+                    ohlv = data0.copy()
+                    ohlv[0] = since
+                    self._data.append(ohlv)
+                    # print('MockData: {}, Adding: {}'.format(self.p.dataname, ohlv))
+                    since += interval
+                self._last_ts = data0[0]
 
-                # for ohlcv in sorted(self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity,
-                #                                           since=since, limit=limit, params=self.p.fetch_ohlcv_params)):
+            with open('../data/' + symbol + '.csv', 'a+', newline='') as f:
+                writer = csv.writer(f)
 
-                if None in ohlcv:
-                    continue
+                for ohlcv in data:
 
-                tstamp = ohlcv[0]
+                    # for ohlcv in sorted(self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity,
+                    #                                           since=since, limit=limit, params=self.p.fetch_ohlcv_params)):
 
-                # Prevent from loading incomplete data
-                # if tstamp > (time.time() * 1000):
-                #    continue
+                    if None in ohlcv:
+                        continue
 
-                if tstamp > self._last_ts:
-                    if self.p.debug:
-                        print('Adding: {}'.format(ohlcv))
-                    self._data.append(ohlcv)
-                    self._last_ts = tstamp
+                    tstamp = ohlcv[0]
+
+                    # Prevent from loading incomplete data
+                    # if tstamp > (time.time() * 1000):
+                    #    continue
+                    if end_date is not None and tstamp > end_date:
+                        break
+                    if since is not None and tstamp < since:
+                        continue
+
+                    if tstamp > self._last_ts:
+                        # if self.p.debug:
+                        # print('Data: {}, Adding: {}'.format(self.p.dataname, ohlcv))
+                        self._data.append(ohlcv)
+                        self._last_ts = tstamp
+                        if data_from_ccxt:
+                            writer.writerow(ohlcv)
+
             since = self._last_ts
+
+            data_from_ccxt = True
 
             if dlen == len(self._data) or (self._last_ts >= end_date if end_date is not None else False):
                 break

@@ -1,0 +1,1 @@
+nohup node jump_eth.js >/dev/null 2>&1 &

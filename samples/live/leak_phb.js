@@ -301,7 +301,7 @@ class MyTrader {
         // "agent": httpsAgent
     });
 
-    var symbol = "PHB/BUSD";
+    var symbol = "ETH/BUSD";
 
     let markets = await exchange.loadMarkets();
     let market = markets[symbol];
@@ -371,7 +371,7 @@ class MyTrader {
             trading = true;
         }
         else if (bidPrice < askPrice*0.9992){
-            let size = 5;
+            let size = 0.005;
             if (status == "down") {
                 let order = await broker.sell(askPrice, size, 200, true);
                 if (order.status == 'closed') {
