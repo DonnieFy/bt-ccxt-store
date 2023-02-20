@@ -2,8 +2,10 @@
   "dependencies": {
     "@luminati-io/socksv5": "^0.0.7",
     "ccxt": "^1.93.13",
+    "crypto": "^1.0.1",
     "global-tunnel-ng": "^2.7.1",
     "https-proxy-agent": "^5.0.1",
-    "log-timestamp": "^0.3.0"
+    "log-timestamp": "^0.3.0",
+    "request": "^2.88.2"
   }
 }
