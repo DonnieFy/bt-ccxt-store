@@ -250,15 +250,15 @@ class MyBroker {
         // "agent": httpsAgent
     });
 
-    var symbol = "1000LUNC/BUSD";
+    var symbol = "APT/USDT";
 
     let markets = await exchange.loadMarkets();
     let market = markets[symbol];
     let amountMin = parseFloat(market.limits.amount.min);
     let amountPrecision = parseInt(market.precision.amount);
     let priceMin = parseFloat(market.limits.price.min);
-    let pricePresision = parseInt(market.precision.price) + 1;
-    
+    let pricePresision = parseInt(market.precision.price);
+
     let broker = new MyBroker(exchange, symbol);
     let trader = new MyTrader();
 
@@ -283,8 +283,8 @@ class MyBroker {
         let bid1 = orderbook.bids[0][0]
         let ask1 = orderbook.asks[0][0]
 
-        let bidPrice = bestBid * 0.618 + bestAsk * 0.382
-        let askPrice = bestBid * 0.382 + bestAsk * 0.618
+        let bidPrice = bestBid + priceGrain
+        let askPrice = bestAsk - priceGrain
         logger.log("bid price: %d, ask price: %d", bidPrice, askPrice);
 
         if (orderId) {
@@ -296,27 +296,27 @@ class MyBroker {
         let positionAmt = await broker.getPosition();
         let trading = false;
         if (positionAmt > 0) {
-            let price = status == 'up' ? askPrice : ask1;
-            let order = await broker.sell(price, positionAmt, 500, false, {"reduceOnly": true});
+            let price = askPrice;
+            let order = await broker.sell(price, positionAmt, 500, false, { "reduceOnly": true });
             if (order.status == "open") {
                 orderId = order.orderId;
             }
             trading = true;
         }
         else if (positionAmt < 0) {
-            let price = status == "down" ? bidPrice : bid1;
-            let order = await broker.buy(price, -positionAmt, 500, false, {"reduceOnly": true});
+            let price = bidPrice;
+            let order = await broker.buy(price, -positionAmt, 500, false, { "reduceOnly": true });
             if (order.status == "open") {
                 orderId = order.orderId;
             }
             trading = true;
         }
-        else {
-            let size = 20;
+        else if (askPrice > bidPrice * 1.001) {
+            let size = 0.8;
             if (status == "up") {
                 let order = await broker.buy(bidPrice, size, 500, true);
                 if (order.status == 'closed') {
-                    order = await broker.sell(bidPrice*1.001, size, 500, false);
+                    order = await broker.sell(askPrice, size, 500, false);
                     if (order.status == "open") {
                         orderId = order.orderId;
                     }
@@ -326,7 +326,7 @@ class MyBroker {
             else if (status == "down") {
                 let order = await broker.sell(askPrice, size, 500, true);
                 if (order.status == 'closed') {
-                    order = await broker.buy(askPrice*0.999, size, 500, false);
+                    order = await broker.buy(bidPrice, size, 500, false);
                     if (order.status == "open") {
                         orderId = order.orderId;
                     }
