@@ -29,12 +29,15 @@ const crypto = require('crypto')
             auths: [socks.auth.None()]
         })
 
-        const secret = 'W9ffpThUt5TLVqOJG2tNZeFyAhiDJqyUK3lX3IgRqBTEpcG2SuHRJFLQyvyCTpK0';
-        const apiKey = 'NHOkdZV92IY0sIcvdfswkc60SCyJAKTnrbgkHILGDHQW6NXGo87NwzQmBXXFGJSo';
+        let content = fs.readFileSync(path.join(__dirname, "../params.json"));
+        let params = JSON.parse(content);
+
+        const secret = params["binance"]["secret"];
+        const apiKey = params["binance"]["apikey"];
 
         const exchange = new ccxt.binance({
-            'apiKey': 'NHOkdZV92IY0sIcvdfswkc60SCyJAKTnrbgkHILGDHQW6NXGo87NwzQmBXXFGJSo',
-            'secret': 'W9ffpThUt5TLVqOJG2tNZeFyAhiDJqyUK3lX3IgRqBTEpcG2SuHRJFLQyvyCTpK0',
+            'apiKey': apiKey,
+            'secret': secret,
             'agent': httpsAgent,
             'options': {
                 'defaultType': 'future'
@@ -93,27 +96,96 @@ const crypto = require('crypto')
 
         // console.log('[' + new Date().toISOString() +'] end');
 
-        function signature(query_string) {
+        function sign(query_string) {
             return crypto
                 .createHmac('sha256', secret)
                 .update(query_string)
                 .digest('hex');
         }
-
-        function createOrder(symbol, orderType, orderSide, amount, price, params) {
-            let queryString = `symbol=${symbol}&side=${orderSide}&type=${orderType}&timeInForce=GTC&quantity=${amount}&price=${price}&recvWindow=5000&timestamp=${Date.now()}`;
-
-            let sign = signature(queryString).replace(/\n/g, '');
-            let url = 'https://fapi.binance.com/fapi/v1/order' + '?signature=' + encodeURIComponent(sign);
-            request({
-                url: url,
-                headers: {
-                  'content-type': 'application/json',
-                  'X-MBX-APIKEY': apiKey,
-                },
-                method: "POST"
-            })
+        
+        const assignDefaultParams = function (params) {
+            params.recvWindow = 3000;
+            params.timestamp = Date.now();
         }
+
+        const makeQueryString = function (json) {
+            return `${Object.keys(json)
+                .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(json[k])}`)
+                .join('&')}`
+        }
+
+        const privateCall = function (baseUrl, method, params) {
+            assignDefaultParams(params);
+            let signature = sign(makeQueryString(params));
+            let url = baseUrl + '?' + makeQueryString({ ...params, signature });
+
+        //    console.log(url);
+            return new Promise((resolve, reject) => {
+                request({
+                    url: url,
+                    headers: {
+                        'content-type': 'application/json',
+                        'X-MBX-APIKEY': apiKey,
+                    },
+                    method: method,
+                    proxy: proxy
+                }, function (error, response, body) {
+                    if (error) {
+                        return reject(error);
+                    }
+                    let data = JSON.parse(body);
+                    resolve(data);
+                });
+
+            });
+        }
+
+        function fetch_positions(symbol) {
+            let data = { symbol };
+            return privateCall('https://fapi.binance.com/fapi/v2/positionRisk', 'GET', data)
+        }
+
+        function fetchOrder(orderId, symbol) {
+            let data = { symbol, orderId };
+            return privateCall('https://fapi.binance.com/fapi/v1/order', 'GET', data)
+        }
+
+        function cancelOrder(orderId, symbol) {
+            let data = { symbol, orderId };
+            return privateCall('https://fapi.binance.com/fapi/v1/order', 'DELETE', data)
+        }
+
+        function cancelAllOrders(symbol) {
+            let data = { symbol };
+            return privateCall('https://fapi.binance.com/fapi/v1/allOpenOrders', 'DELETE', data)
+        }
+
+        function fetchMyTrades(symbol, startTime) {
+            let data = { symbol, startTime };
+            return privateCall('https://fapi.binance.com/fapi/v1/userTrades', 'GET', data)
+        }
+
+        function createBatchOrders(orders) {
+            let data = { batchOrders: JSON.stringify(orders) };
+            return privateCall('https://fapi.binance.com/fapi/v1/batchOrders', 'POST', data)
+        }
+
+        /**
+         * 
+         * @param {*} symbol 
+         * @param {*} type LIMIT, MARKET, STOP, TAKE_PROFIT, STOP_MARKET, TAKE_PROFIT_MARKET, TRAILING_STOP_MARKET
+         * @param {*} side 
+         * @param {*} quantity 
+         * @param {*} price 
+         * @param {*} params reduceOnly,stopPrice,workingType(MARK_PRICE, CONTRACT_PRICE)
+         * @returns 
+         */
+        function createOrder(symbol, type, side, quantity, price, params) {
+            params = params || {};
+            let data = { symbol, type, side, timeInForce: "GTC", quantity, price, ...params };
+            return privateCall('https://fapi.binance.com/fapi/v1/order', 'POST', data)
+        }
+
 
         function fetch_ohlcv(symbol) {
             return new Promise((resolve, reject) => {
@@ -132,7 +204,6 @@ const crypto = require('crypto')
         }
 
         let data = await fetch_ohlcv("BTCUSDT");
-        console.log(data.sort);
 
         function fetchBalance() {
             let t = exchange.milliseconds()
@@ -159,6 +230,33 @@ const crypto = require('crypto')
                 });
             })
         }
+
+        let symbol = 'BTCUSDT'
+
+        let res = await createOrder(symbol, 'LIMIT', 'BUY', 0.001, 23000);
+        console.log(JSON.stringify(res));
+        let orderId = res.orderId;
+
+        res = await createBatchOrders([{
+            symbol, type: "LIMIT", side: "BUY", quantity: '0.001', price: '22999', timeInForce: "GTC"
+        }])
+        console.log(JSON.stringify(res));
+
+        res = await fetchOrder(orderId, symbol);
+        console.log(JSON.stringify(res));
+
+        res = await fetch_positions('OGNUSDT')
+        console.log(JSON.stringify(res));
+
+        res = await cancelOrder(orderId, symbol);
+        console.log(JSON.stringify(res));
+
+        res = await cancelAllOrders(symbol);
+        console.log(JSON.stringify(res));
+
+        res = await fetchMyTrades('RNDRUSDT', exchange.milliseconds() - 1000 * 60 * 60);
+        console.log(JSON.stringify(res));
+        
 
         // let balance = await fetchBalance();
         // console.log(balance);
